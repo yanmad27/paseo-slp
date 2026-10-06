@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.0](https://github.com/yanmad27/paseo-slp/compare/v2.4.0...v2.5.0) (2026-10-06)
+
+
+### Features
+
+* slp-gc reclaims the safe tier by default; the Supervisor applies it on an alert without asking ([#49](https://github.com/yanmad27/paseo-slp/issues/49)) ([09e6158](https://github.com/yanmad27/paseo-slp/commit/09e61588ce3d0caa9edbd0fbbb9436c84b13330f))
+
 ## [2.4.0](https://github.com/yanmad27/paseo-slp/compare/v2.3.0...v2.4.0) (2026-10-01)
 
 
