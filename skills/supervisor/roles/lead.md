@@ -414,7 +414,8 @@ gets one reviewer per chunk.
   as `DECISION_NEEDED`. Pending permission ≠ stalled.
 - Stalled Peer (running, no activity for 6+ min, no pending permission, and
   its last activity is not a long foreground command such as a build, test
-  run, or `--watch` — you may be asked about one): (1) `send_agent_prompt` — "Status
+  run, or `--watch` (a watch Peer's, while the call is in flight) — you may
+  be asked about one): (1) `send_agent_prompt` — "Status
   check: reply with what you have done, what is blocking you, and continue.
   If waiting on a permission, say so." (2) Still silent: `cancel_agent`,
   then `send_agent_prompt` with the original brief plus What was tried
@@ -423,6 +424,41 @@ gets one reviewer per chunk.
   same tier — this is not a capability failure, do not escalate.
 - `[Committee]` and `[Advisor]` agents think long; only treat them as
   stalled after 30 min of silence.
+
+# EXTERNAL JOBS (CI, DEPLOY)
+Never end a turn idle on `STATUS: waiting on CI` with nothing running: the
+Supervisor then has nothing to wait on and its spinner stops. PROTOCOL.md
+(External jobs) defines the rule; yours:
+- Launch a "Cheap peer" watch Peer — keep it on Cheap peer; its brief gives
+  no write scope ("do not modify files; run only the watch") — whose brief
+  gives the PR or run ID, the commit, and the command: one foreground
+  `gh pr checks <pr> --watch --fail-fast --interval 30` or `gh run watch
+  <id> --exit-status --compact --interval 30`, Bash `timeout` 600000. Say in
+  the brief: at most 7 watch calls in total; at about the `timeout` with
+  checks pending, stop the background task first (`TaskStop`) and re-run the
+  same single watch (never two at once, never `sleep`, a loop, or repeated
+  status calls); "no checks reported" → do not re-run, end at once with
+  `REVIEW` "no checks registered yet for <sha>";
+  backgrounded well before the `timeout` → stop, retry once, else end with
+  `BLOCKED`; judge by exit
+  code plus the final table; do not read logs; end with `REVIEW`. Then
+  report `STATUS: waiting on CI` and end your turn; a running Peer is what
+  the Supervisor waits on.
+- On the `REVIEW` (the watch form: no candidate to accept; act on it): all green → continue. A failure → hand the failing run's
+  logs to a Peer to read (the investigation hard line), then the fix to a
+  writer Peer; a fix push → a new watch Peer for the new run. "No checks
+  registered yet for <sha>" → report `STATUS: waiting on CI — no watch Peer:
+  checks not registered yet for <sha>` and end your turn; the Supervisor's
+  next heartbeat prompts you, then relaunch the watch once. If it again gets
+  "no checks reported", treat the commit as having no CI (path filters, no
+  trigger, or CI not configured): proceed without CI evidence per your
+  acceptance criteria, or `DECISION_NEEDED`. No further relaunch. "Still pending after 7 watches" → launch a new watch or `DECISION_NEEDED`.
+- On `BLOCKED` from a watch Peer, or if no Peer can be launched: report
+  `STATUS: waiting on <job> — no watch Peer: <reason>` with the PR or run
+  ID, and say the Supervisor's spinner is off. Never leave a bare
+  `waiting on CI`.
+- A watch Peer is not stalled while its foreground watch call is in flight
+  (see above).
 
 # CLOSING THE LOOP
 After acceptance: update the project's existing status source within your
