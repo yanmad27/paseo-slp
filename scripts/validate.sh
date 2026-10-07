@@ -424,7 +424,7 @@ RENDER_HOME="$TMP/home-render"
 mkdir -p "$RENDER_HOME/bin" "$RENDER_HOME/.claude/skills/supervisor" "$RENDER_HOME/.claude/skills/other" "$RENDER_HOME/.config/slp-room"
 printf '{"theme": "dark", "enabledPlugins": {"paseo-slp@paseo-slp": true, "orchestrate@my-orchestrate-skill": true, "x@y": true}}\n' > "$RENDER_HOME/.claude/settings.json"
 printf 'mine\n' > "$RENDER_HOME/.claude/CLAUDE.md"
-printf 'sk-ant-oat01-test\n' > "$RENDER_HOME/.config/slp-room/oauth-token"
+printf 'token=sk-ant-oat01-test\n' > "$RENDER_HOME/.config/slp-room/auth"
 mkdir -p "$RENDER_HOME/.codex"
 printf '{}\n' > "$RENDER_HOME/.codex/auth.json"
 printf 'model = "x"\n' > "$RENDER_HOME/.codex/config.toml"
@@ -484,7 +484,7 @@ fi
 # --token without a terminal cannot ask, so it keeps the saved token instead of dropping it.
 KEEP_HOME="$TMP/home-keep-token"
 mkdir -p "$KEEP_HOME/.config/slp-room"
-printf 'sk-ant-oat01-keep\n' > "$KEEP_HOME/.config/slp-room/oauth-token"
+printf 'token=sk-ant-oat01-keep\n' > "$KEEP_HOME/.config/slp-room/auth"
 if HOME="$KEEP_HOME" "$REPO_ROOT/install.sh" --paseo-only --no-reload --token >/dev/null 2>&1 \
   && jq -e '.agents.providers["claude-lead"].env.CLAUDE_CODE_OAUTH_TOKEN == "sk-ant-oat01-keep"' \
     "$KEEP_HOME/.paseo/config.json" >/dev/null; then
@@ -537,6 +537,51 @@ if [ "$EP_OK" = 1 ] \
   ok "install.sh's endpoint render gives Claude providers ANTHROPIC_BASE_URL + one key variable and no OAuth token; the token render has no ANTHROPIC_*"
 else
   fail "install.sh's Claude provider env mixes OAuth-token and ANTHROPIC_* variables"
+fi
+
+# Auth lives in one private file, $ROOM_HOME/auth. A fresh endpoint install writes only that (mode
+# 600, key whitespace kept); the old five-file layout migrates into it on the next run, rendering
+# the same provider env as the single file written directly, then a second run changes nothing; a
+# differing old file never overrides or loses to the single file.
+auth_run() { HOME="$1" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1; }
+auth_env() { jq -S '.agents.providers | map_values(.env)' "$1/.paseo/config.json" | sed "s#$1#HOME#g"; }
+AUTH_OK=1
+A1="$TMP/home-auth-fresh"; mkdir -p "$A1"
+HOME="$A1" SLP_CLAUDE_BASE_URL=https://gw.example.com SLP_CLAUDE_AUTH_TOKEN=' k e y ' SLP_CLAUDE_AUTH_HEADER=x-api-key \
+  "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1 || AUTH_OK=0
+[ "$(ls "$A1/.config/slp-room" | grep -cE '^(auth-mode|oauth-token|anthropic-)')" = 0 ] \
+  && [ "$(stat -f %Lp "$A1/.config/slp-room/auth" 2>/dev/null || stat -c %a "$A1/.config/slp-room/auth")" = 600 ] \
+  && grep -qxF 'key=k e y' "$A1/.config/slp-room/auth" || AUTH_OK=0
+for layout in token endpoint; do
+  AO="$TMP/home-auth-old-$layout"; AN="$TMP/home-auth-new-$layout"
+  mkdir -p "$AO/.config/slp-room" "$AN/.config/slp-room"
+  if [ "$layout" = token ]; then
+    printf 'sk-ant-oat01-t\n' > "$AO/.config/slp-room/oauth-token"; printf 'token\n' > "$AO/.config/slp-room/auth-mode"
+    printf 'mode=token\ntoken=sk-ant-oat01-t\n' > "$AN/.config/slp-room/auth"
+  else
+    printf 'https://gw.example.com\n' > "$AO/.config/slp-room/anthropic-base-url"; printf 'k e y\n' > "$AO/.config/slp-room/anthropic-api-key"
+    printf 'x-api-key\n' > "$AO/.config/slp-room/anthropic-auth-header"; printf 'endpoint\n' > "$AO/.config/slp-room/auth-mode"
+    printf 'mode=endpoint\nurl=https://gw.example.com\nkey=k e y\nheader=x-api-key\n' > "$AN/.config/slp-room/auth"
+  fi
+  auth_run "$AO" && auth_run "$AN" || AUTH_OK=0
+  cp "$AO/.config/slp-room/auth" "$TMP/auth-first"
+  auth_run "$AO" || AUTH_OK=0
+  [ "$(ls "$AO/.config/slp-room" | grep -cE '^(auth-mode|oauth-token|anthropic-)')" = 0 ] \
+    && cmp -s "$AO/.config/slp-room/auth" "$AN/.config/slp-room/auth" \
+    && cmp -s "$AO/.config/slp-room/auth" "$TMP/auth-first" \
+    && [ "$(auth_env "$AO")" = "$(auth_env "$AN")" ] || AUTH_OK=0
+done
+# Conflict: the single file wins and a differing old file is kept; a partial old layout migrates as is.
+AC="$TMP/home-auth-conflict"; mkdir -p "$AC/.config/slp-room"
+printf 'mode=token\ntoken=sk-ant-oat01-new\n' > "$AC/.config/slp-room/auth"; printf 'sk-ant-oat01-old\n' > "$AC/.config/slp-room/oauth-token"
+auth_run "$AC" 2>/dev/null; [ "$(cat "$AC/.config/slp-room/oauth-token")" = sk-ant-oat01-old ] \
+  && jq -e '.agents.providers["claude-lead"].env.CLAUDE_CODE_OAUTH_TOKEN == "sk-ant-oat01-new"' "$AC/.paseo/config.json" >/dev/null || AUTH_OK=0
+AP="$TMP/home-auth-partial"; mkdir -p "$AP/.config/slp-room"; printf 'endpoint\n' > "$AP/.config/slp-room/auth-mode"
+auth_run "$AP"; [ ! -e "$AP/.config/slp-room/auth-mode" ] && grep -qxF 'mode=endpoint' "$AP/.config/slp-room/auth" || AUTH_OK=0
+if [ "$AUTH_OK" = 1 ]; then
+  ok "install.sh keeps auth in one private file and migrates the old five files into it without changing the rendered env"
+else
+  fail "install.sh's single auth file or its migration from the old five files misbehaved"
 fi
 
 # v1 cleanup: only the v1 plugin (user scope) and marketplace are removed; a project-scope

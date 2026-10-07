@@ -145,10 +145,20 @@ fi
 VERSION="$(tr -d '[:space:]' < "$SRC/version.txt")"
 
 # --- auth: decided, validated and saved before anything else changes ---------------------
-# Every Claude seat shares one auth, in one of two modes remembered in $ROOM_HOME/auth-mode:
-#   token     one `claude setup-token` token, kept in $ROOM_HOME/oauth-token (mode 600)
-#   endpoint  any Anthropic-compatible proxy or gateway: a base URL and a key, kept in
-#             $ROOM_HOME/anthropic-{base-url,api-key,auth-header} (mode 600)
+# Every Claude seat shares one auth, in one of two modes, all kept in ONE private file,
+# $ROOM_HOME/auth (mode 600, written atomically, read as data and never sourced), one
+# `name=value` line per field (split on the first `=`; the key's value keeps interior spaces):
+#   mode      token | endpoint
+#   token     one `claude setup-token` token (token mode)
+#   url, key, header   any Anthropic-compatible proxy or gateway: base URL, key, bearer|x-api-key
+# Migration: older installs kept these in five mode-600 files (auth-mode, oauth-token,
+# anthropic-base-url, anthropic-api-key, anthropic-auth-header). On any run that gets here, each
+# old file is read with its old rules (all whitespace stripped, except the key: first line only),
+# and its value is carried into $ROOM_HOME/auth only if auth has no such field yet; then the old
+# file is deleted, but only when its value is now in auth (or it was empty). So a partial old
+# layout migrates what exists, as is. If auth already exists it wins: an old file whose value
+# differs is left untouched with a warning, never deleted, so no credential is lost silently.
+# An old key file with more than its first line is also kept. A second run changes nothing.
 # Rules: SLP_CLAUDE_* and --token / --endpoint pick the mode, else the saved one (default
 # token). --token with no token, or --endpoint with no complete endpoint, keeps what is
 # saved. auth-mode=token is saved only with a saved token; SLP_CLAUDE_OAUTH_TOKEN is used
@@ -156,17 +166,85 @@ VERSION="$(tr -d '[:space:]' < "$SRC/version.txt")"
 # /dev/tty, which still works when piped. The key is never taken from an argument.
 OAUTH_TOKEN=""; BASE_URL=""; API_KEY=""; ENDPOINT_KEY_VAR=""
 if [ "$DO_PASEO" = 1 ]; then
-  TOKEN_FILE="$ROOM_HOME/oauth-token"
-  MODE_FILE="$ROOM_HOME/auth-mode"
-  URL_FILE="$ROOM_HOME/anthropic-base-url"
-  KEY_FILE="$ROOM_HOME/anthropic-api-key"
-  HDR_FILE="$ROOM_HOME/anthropic-auth-header"
-  save_private() { mkdir -p "$ROOM_HOME"; (umask 077 && printf '%s\n' "$2" > "$1"); chmod 600 "$1"; }
-  saved() { if [ -f "$1" ]; then tr -d '[:space:]' < "$1"; fi; }
-  # The key is opaque: only its first line is read back, interior whitespace intact. Surrounding
+  AUTH_FILE="$ROOM_HOME/auth"
+  # The key is opaque: its value is kept whole, interior whitespace intact. Surrounding
   # whitespace (a trailing newline included) is trimmed; only an empty key or a line break
-  # inside it is rejected.
-  saved_line() { local v=""; if [ -f "$1" ]; then IFS= read -r v < "$1" || true; fi; printf '%s' "$v"; }
+  # inside it is rejected. The other fields are stored without any whitespace.
+  A_MODE=""; A_TOKEN=""; A_URL=""; A_KEY=""; A_HDR=""
+  auth_load() {
+    local line k v
+    A_MODE=""; A_TOKEN=""; A_URL=""; A_KEY=""; A_HDR=""
+    [ -f "$AUTH_FILE" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in *=*) ;; *) continue ;; esac
+      k="${line%%=*}"; v="${line#*=}"
+      case "$k" in
+        mode) A_MODE="${v//[[:space:]]/}" ;;
+        token) A_TOKEN="${v//[[:space:]]/}" ;;
+        url) A_URL="${v//[[:space:]]/}" ;;
+        key) A_KEY="$v" ;;
+        header) A_HDR="${v//[[:space:]]/}" ;;
+      esac
+    done < "$AUTH_FILE"
+  }
+  # Write the A_* fields to $AUTH_FILE: private temp file, then rename; untouched when unchanged.
+  auth_write() {
+    local tmp
+    mkdir -p "$ROOM_HOME"
+    tmp="$(umask 077 && mktemp "$ROOM_HOME/.auth.XXXXXX")"
+    {
+      [ -z "$A_MODE" ] || printf 'mode=%s\n' "$A_MODE"
+      [ -z "$A_TOKEN" ] || printf 'token=%s\n' "$A_TOKEN"
+      [ -z "$A_URL" ] || printf 'url=%s\n' "$A_URL"
+      [ -z "$A_KEY" ] || printf 'key=%s\n' "$A_KEY"
+      [ -z "$A_HDR" ] || printf 'header=%s\n' "$A_HDR"
+    } > "$tmp"
+    chmod 600 "$tmp"
+    if [ -f "$AUTH_FILE" ] && cmp -s "$tmp" "$AUTH_FILE"; then rm -f "$tmp"; chmod 600 "$AUTH_FILE"
+    else mv -f "$tmp" "$AUTH_FILE"; fi
+  }
+  # Fold the five old files into $AUTH_FILE (rules in the comment above).
+  auth_migrate() {
+    local f new first n_old=0
+    for f in auth-mode oauth-token anthropic-base-url anthropic-api-key anthropic-auth-header; do
+      [ -e "$ROOM_HOME/$f" ] && n_old=$((n_old + 1))
+    done
+    [ "$n_old" -gt 0 ] || return 0
+    auth_load
+    local had_auth=0; [ -f "$AUTH_FILE" ] && had_auth=1
+    old_val() {  # old_val <file> → the value the old rules read from it
+      case "$1" in
+        anthropic-api-key) first=""; IFS= read -r first < "$ROOM_HOME/$1" || true; printf '%s' "$first" ;;
+        *) tr -d '[:space:]' < "$ROOM_HOME/$1" ;;
+      esac
+    }
+    local v
+    v="$(old_val auth-mode)" 2>/dev/null || v=""; [ -n "$A_MODE" ] || A_MODE="$v"
+    v="$(old_val oauth-token)" 2>/dev/null || v=""; [ -n "$A_TOKEN" ] || A_TOKEN="$v"
+    v="$(old_val anthropic-base-url)" 2>/dev/null || v=""; [ -n "$A_URL" ] || A_URL="$v"
+    v="$(old_val anthropic-api-key)" 2>/dev/null || v=""; [ -n "$A_KEY" ] || A_KEY="$v"
+    v="$(old_val anthropic-auth-header)" 2>/dev/null || v=""; [ -n "$A_HDR" ] || A_HDR="$v"
+    if [ -n "$A_MODE$A_TOKEN$A_URL$A_KEY$A_HDR" ]; then
+      auth_write
+      auth_load  # what is on disk now is what is compared below
+    fi
+    for f in auth-mode oauth-token anthropic-base-url anthropic-api-key anthropic-auth-header; do
+      [ -e "$ROOM_HOME/$f" ] || continue
+      v="$(old_val "$f")" 2>/dev/null || v=""
+      case "$f" in
+        auth-mode) new="$A_MODE" ;; oauth-token) new="$A_TOKEN" ;; anthropic-base-url) new="$A_URL" ;;
+        anthropic-api-key) new="$A_KEY" ;; *) new="$A_HDR" ;;
+      esac
+      if [ -f "$ROOM_HOME/$f" ] && [ ! -L "$ROOM_HOME/$f" ] \
+        && { [ -z "$(tr -d '[:space:]' < "$ROOM_HOME/$f")" ] || { [ "$v" = "$new" ] \
+          && [ "$(tr -d '[:space:]' < "$ROOM_HOME/$f")" = "$(printf '%s' "$v" | tr -d '[:space:]')" ]; }; }; then
+        rm -f "$ROOM_HOME/$f"
+      else
+        echo "WARNING: $ROOM_HOME/$f differs from or goes beyond $AUTH_FILE; left in place, $AUTH_FILE wins. Delete it once you no longer need it." >&2
+      fi
+    done
+    [ "$had_auth" = 1 ] || [ ! -f "$AUTH_FILE" ] || echo "Moved the saved auth into $AUTH_FILE"
+  }
   trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
   norm_url() {
     local u
@@ -176,6 +254,8 @@ if [ "$DO_PASEO" = 1 ]; then
   }
   redact_url() { sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@#\1***@#'; }
   key_ok() { case "$1" in ""|*$'\n'*|*$'\r'*) return 1 ;; esac; }
+  auth_migrate
+  auth_load
 
   ENV_TOKEN="${SLP_CLAUDE_OAUTH_TOKEN:-}"
   EP_URL="${SLP_CLAUDE_BASE_URL:-}"
@@ -214,7 +294,7 @@ if [ "$DO_PASEO" = 1 ]; then
     echo "WARNING: --endpoint needs a terminal to ask on; using the saved endpoint." >&2
     ASK_ENDPOINT=0
   fi
-  SAVED_MODE="$(saved "$MODE_FILE")"
+  SAVED_MODE="$A_MODE"
   if [ "$EP_REQ" = 1 ]; then MODE=endpoint
   elif [ "$TOKEN_REQ" = 1 ]; then MODE=token
   elif [ "$SAVED_MODE" = endpoint ]; then MODE=endpoint
@@ -225,8 +305,8 @@ if [ "$DO_PASEO" = 1 ]; then
   if [ "$MODE" = token ]; then
     OAUTH_TOKEN="$ENV_TOKEN"
     TOKEN_FROM_FILE=0; PASTED_OK=0
-    if [ -z "$OAUTH_TOKEN" ] && [ "$ASK_TOKEN" = 0 ] && [ -f "$TOKEN_FILE" ]; then
-      OAUTH_TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+    if [ -z "$OAUTH_TOKEN" ] && [ "$ASK_TOKEN" = 0 ]; then
+      OAUTH_TOKEN="$A_TOKEN"
       [ -z "$OAUTH_TOKEN" ] || TOKEN_FROM_FILE=1
     fi
     if [ -z "$OAUTH_TOKEN" ] && [ "$TOKEN_REQ" = 0 ] && [ "$HAS_TTY" = 1 ]; then
@@ -258,23 +338,23 @@ if [ "$DO_PASEO" = 1 ]; then
       case "$PASTED" in
         "") ;;
         sk-ant-oat*)
-          save_private "$TOKEN_FILE" "$PASTED"
+          A_TOKEN="$PASTED"; auth_write
           OAUTH_TOKEN="$PASTED"; PASTED_OK=1
-          echo "Saved the token to $TOKEN_FILE"
+          echo "Saved the token to $AUTH_FILE"
           ;;
         *) echo "WARNING: that is not a 'claude setup-token' token (sk-ant-oat…); not saved." >&2 ;;
       esac
       PASTED=""
       # Skipping the prompt (or a bad paste) keeps the token that was already saved.
-      if [ -z "$OAUTH_TOKEN" ] && [ -f "$TOKEN_FILE" ]; then
-        OAUTH_TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
-        [ -z "$OAUTH_TOKEN" ] || { TOKEN_FROM_FILE=1; echo "Kept the saved token in $TOKEN_FILE"; }
+      if [ -z "$OAUTH_TOKEN" ]; then
+        OAUTH_TOKEN="$A_TOKEN"
+        [ -z "$OAUTH_TOKEN" ] || { TOKEN_FROM_FILE=1; echo "Kept the saved token in $AUTH_FILE"; }
       fi
     fi
     if [ -z "$OAUTH_TOKEN" ] && { [ "$TOKEN_FLAG" = 1 ] || [ "$CHOSE_TOKEN" = 1 ]; } \
-      && [ "$SAVED_MODE" = endpoint ] && [ -n "$(saved "$URL_FILE")" ] && [ -n "$(saved_line "$KEY_FILE")" ]; then
+      && [ "$SAVED_MODE" = endpoint ] && [ -n "$A_URL" ] && [ -n "$A_KEY" ]; then
       MODE=endpoint  # no token came out of it: keep the saved endpoint rather than drop auth
-      echo "Kept the saved endpoint $(saved "$URL_FILE" | redact_url) (no token was given)."
+      echo "Kept the saved endpoint $(printf '%s' "$A_URL" | redact_url) (no token was given)."
     fi
   fi
   if [ "$MODE" = token ]; then
@@ -283,7 +363,7 @@ if [ "$DO_PASEO" = 1 ]; then
       echo "  install.sh with --token and paste it — or log in once per runtime:" >&2
       echo "  CLAUDE_CONFIG_DIR=$ROOM_HOME/claude-<supervisor|lead|peer> claude" >&2
     elif [ -z "$ENV_TOKEN" ] && { [ "$PASTED_OK" = 1 ] || { [ "$TOKEN_FLAG" = 1 ] && [ "$TOKEN_FROM_FILE" = 1 ]; }; }; then
-      save_private "$MODE_FILE" token
+      A_MODE=token; auth_write
     fi
   fi
 
@@ -293,11 +373,11 @@ if [ "$DO_PASEO" = 1 ]; then
   # else bearer if SLP_CLAUDE_BASE_URL is set; else the saved one; else bearer.
   if [ "$MODE" = endpoint ]; then
     CUR_URL="$EP_URL"; CUR_KEY="$EP_KEY"
-    [ -n "$CUR_URL" ] || CUR_URL="$(saved "$URL_FILE")"
-    [ -n "$CUR_KEY" ] || CUR_KEY="$(saved_line "$KEY_FILE")"
+    [ -n "$CUR_URL" ] || CUR_URL="$A_URL"
+    [ -n "$CUR_KEY" ] || CUR_KEY="$A_KEY"
     if [ -n "$EP_HDR" ]; then CUR_HDR="$EP_HDR"       # explicit header
     elif [ -n "$EP_URL" ]; then CUR_HDR=bearer         # a new endpoint starts at the default
-    else CUR_HDR="$(saved "$HDR_FILE")"; fi            # a rotated key keeps the saved header
+    else CUR_HDR="$A_HDR"; fi            # a rotated key keeps the saved header
     ASK_URL=0; ASK_KEY=0
     if [ "$HAS_TTY" = 1 ]; then
       if [ -z "$EP_URL" ] && { [ "$ASK_ENDPOINT" = 1 ] || [ -z "$CUR_URL" ]; }; then ASK_URL=1; fi
@@ -343,14 +423,11 @@ if [ "$DO_PASEO" = 1 ]; then
     fi
     case "$CUR_HDR" in bearer|x-api-key) ;; *) CUR_HDR=bearer ;; esac
     if [ -n "$CUR_URL" ] && [ -n "$CUR_KEY" ]; then
-      if [ "$CUR_URL" != "$(saved "$URL_FILE")" ] || [ "$CUR_KEY" != "$(saved_line "$KEY_FILE")" ] \
-        || [ "$CUR_HDR" != "$(saved "$HDR_FILE")" ]; then
-        save_private "$URL_FILE" "$CUR_URL"
-        save_private "$KEY_FILE" "$CUR_KEY"
-        save_private "$HDR_FILE" "$CUR_HDR"
-        echo "Saved the endpoint to $ROOM_HOME/anthropic-{base-url,api-key,auth-header}"
+      if [ "$CUR_URL" != "$A_URL" ] || [ "$CUR_KEY" != "$A_KEY" ] || [ "$CUR_HDR" != "$A_HDR" ]; then
+        A_URL="$CUR_URL"; A_KEY="$CUR_KEY"; A_HDR="$CUR_HDR"
+        echo "Saved the endpoint to $AUTH_FILE"
       fi
-      save_private "$MODE_FILE" endpoint
+      A_MODE=endpoint; auth_write
       BASE_URL="$CUR_URL"; API_KEY="$CUR_KEY"
       if [ "$CUR_HDR" = bearer ]; then ENDPOINT_KEY_VAR=ANTHROPIC_AUTH_TOKEN; else ENDPOINT_KEY_VAR=ANTHROPIC_API_KEY; fi
     elif [ "$EP_REQ" = 1 ] && { [ -n "$EP_URL$EP_KEY$EP_HDR" ] || [ "$HAS_TTY" = 0 ]; }; then
@@ -650,8 +727,8 @@ LAUNCHER
   echo "Updated Paseo config: $CONFIG (backup saved alongside it)"
   echo "  Room profiles: $(jq -r '[.daemon.agentProfiles[].name] | join(", ")' "$WORK/snippet.json")"
   echo "  Room providers: $(jq -r '.agents.providers | keys | join(", ")' "$WORK/snippet.json")"
-  [ -z "$OAUTH_TOKEN" ] || echo "  Claude runtimes share the token from $ROOM_HOME/oauth-token"
-  [ -z "$ENDPOINT_KEY_VAR" ] || echo "  Claude runtimes use the endpoint $(printf '%s' "$BASE_URL" | redact_url) (key in $ROOM_HOME/anthropic-api-key, sent via $ENDPOINT_KEY_VAR)"
+  [ -z "$OAUTH_TOKEN" ] || echo "  Claude runtimes share the token from $ROOM_HOME/auth"
+  [ -z "$ENDPOINT_KEY_VAR" ] || echo "  Claude runtimes use the endpoint $(printf '%s' "$BASE_URL" | redact_url) (key in $ROOM_HOME/auth, sent via $ENDPOINT_KEY_VAR)"
   [ -z "$REMOVED" ] || echo "  Removed v1 profiles: $REMOVED"
   DUPES="$(jq -r '[.daemon.agentProfiles[].name] | group_by(.) | map(select(length > 1)[0]) | join(", ")' "$CONFIG")"
   [ -z "$DUPES" ] || echo "WARNING: you also have your own profile(s) named $DUPES; rename yours so the room picks the right one." >&2
