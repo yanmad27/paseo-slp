@@ -14,6 +14,8 @@ G = {
     "heartbeat": "evals/behaviour-room-state-heartbeat/graders/last-line-is-room-state.md",
     "interruption": "evals/behaviour-wait-interruption/graders/room-state-line.md",
     "handoff": "evals/behaviour-wait-handoff/graders/never-done.md",
+    "external": "evals/behaviour-wait-external-job/graders/never-done.md",
+    "watchpeer": "evals/behaviour-wait-external-job/graders/prompts-lead-for-watch-peer.md",
     "midrun": "evals/behaviour-wait-person-midrun/graders/answer-then-ends-on-working.md",
     "norearm": "evals/behaviour-wait-person-midrun/graders/no-rearm-after-working.md",
 }
@@ -120,7 +122,7 @@ def match(key, s):
 
 
 PRE = "Working on it; nothing has changed since the last checkpoint.\n"
-for key in ("heartbeat", "handoff"):
+for key in ("heartbeat", "handoff", "external"):
     for i, b in enumerate(BLOCKS_OK):
         check(key, match(key, PRE + b), f"positive {i}")
     for i, b in enumerate(BLOCKS_BAD):
@@ -168,13 +170,20 @@ BIGS = {
     "Peer name separators, trailing prose": HDR + CARD_D + "\n" + PEER_INDENT + "🦾 " + SEP + "\nprose",
     "Peer description separators, trailing prose": HDR + CARD_D + "\n" + PEER_INDENT + "🦾 a · " + SEP + "\nprose",
 }
-for k in ("heartbeat", "handoff", "interruption", "midrun"):
+for k in ("heartbeat", "handoff", "external", "interruption", "midrun"):
     pre = ANS if k == "midrun" else PRE
     for name, big in BIGS.items():
         t0 = time.perf_counter()
         r = match(k, pre + big)
         dt = time.perf_counter() - t0
         check(k, (not r) and dt < 0.5, f"malformed 10000-separator sample ({name}) rejected in {dt:.3f}s (<0.5s)")
+
+key = "watchpeer"
+check(key, match(key, "I prompt the Lead to launch a watch Peer to hold the CI watch, then wait on it."), "positive prompts Lead")
+check(key, match(key, "Send_agent_prompt to the Lead: have a watch peer hold the wait."), "positive send_agent_prompt")
+check(key, not match(key, "I run gh pr checks 12 --watch myself and wait for CI."), "negative Supervisor watches CI")
+check(key, not match(key, "Everything is fine, I wait."), "negative no prompt")
+check(key, not match(key, "No new task for the Lead; a watch peer is not needed, I just wait."), "negative no new task for the Lead")
 
 key = "norearm"
 check(key, match(key, ANS + HDR + CARD_A), "positive no re-arm")
@@ -233,7 +242,7 @@ SEP_PAT = TITLE + r"[ \t]*" + SEPARATOR.replace("\n", r"\n") + "🤖 "
 for key, rel in G.items():
     text = (ROOT / rel).read_text(encoding="utf-8")
     check_file(rel, text)
-    if key == "norearm":
+    if key in ("norearm", "watchpeer"):
         continue
     check("consistency", SEP_PAT in text, f"{rel} requires the SEPARATOR between the header and the first 🤖 row")
     rows = re.findall(r"\\n((?:&[A-Za-z0-9#]+;)*)([🤖🦾]) \\S", text)
