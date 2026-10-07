@@ -162,8 +162,10 @@ VERSION="$(tr -d '[:space:]' < "$SRC/version.txt")"
 # An old key file with more than its first line is also kept; so is an old file that cannot be
 # read (permissions, other owner), a symbolic link, or anything but a regular file: each is
 # reported by path with a warning, never deleted, never migrated as if empty. A second run
-# changes nothing. Migration runs only after the arguments and SLP_CLAUDE_* values below are
-# validated, so a run that exits on invalid input changes nothing. auth is rewritten whole from
+# changes nothing. Migration runs after the arguments and SLP_CLAUDE_* values below are
+# validated, so an invalid-input run changes nothing; later exits (no complete endpoint, missing
+# jq) may come after a lossless migration. An old auth-mode file is carried over as is, so
+# mode=token can migrate without a token, as the old layout allowed. auth is rewritten whole from
 # the fields above: any other line in it is not kept, and a symlinked auth is replaced by a
 # regular file.
 # Rules: SLP_CLAUDE_* and --token / --endpoint pick the mode, else the saved one (default
@@ -196,21 +198,21 @@ if [ "$DO_PASEO" = 1 ]; then
   }
   # Write the A_* fields to $AUTH_FILE: private temp file, then rename; untouched when unchanged.
   auth_write() {
-    local tmp
+    local tmp content=""
+    [ ! -d "$AUTH_FILE" ] || { echo "$AUTH_FILE is a directory; move it away and re-run." >&2; exit 1; }
+    [ -z "$A_MODE" ] || content+="mode=$A_MODE"$'\n'
+    [ -z "$A_TOKEN" ] || content+="token=$A_TOKEN"$'\n'
+    [ -z "$A_URL" ] || content+="url=$A_URL"$'\n'
+    [ -z "$A_KEY" ] || content+="key=$A_KEY"$'\n'
+    [ -z "$A_HDR" ] || content+="header=$A_HDR"$'\n'
     mkdir -p "$ROOM_HOME"
     tmp="$(umask 077 && mktemp "$ROOM_HOME/.auth.XXXXXX")"
     AUTH_TMP="$tmp"  # removed by the EXIT trap if anything below fails or is interrupted
-    {
-      {
-        [ -z "$A_MODE" ] || printf 'mode=%s\n' "$A_MODE"
-        [ -z "$A_TOKEN" ] || printf 'token=%s\n' "$A_TOKEN"
-        [ -z "$A_URL" ] || printf 'url=%s\n' "$A_URL"
-        [ -z "$A_KEY" ] || printf 'key=%s\n' "$A_KEY"
-        [ -z "$A_HDR" ] || printf 'header=%s\n' "$A_HDR"
-      } > "$tmp" && chmod 600 "$tmp" \
+    # One checked write of the whole content: a failed write never replaces a good auth.
+    { printf '%s' "$content" > "$tmp" && chmod 600 "$tmp" \
         && if [ -f "$AUTH_FILE" ] && cmp -s "$tmp" "$AUTH_FILE"; then rm -f "$tmp"; chmod 600 "$AUTH_FILE"
            else mv -f "$tmp" "$AUTH_FILE"; fi
-    } || { rm -f "$tmp"; AUTH_TMP=""; echo "Could not write $AUTH_FILE." >&2; exit 1; }
+    } || { rm -f "$tmp"; AUTH_TMP=""; echo "Could not write $AUTH_FILE; it is unchanged." >&2; exit 1; }
     AUTH_TMP=""
   }
   # Fold the five old files into $AUTH_FILE (rules in the comment above).

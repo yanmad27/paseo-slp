@@ -596,6 +596,22 @@ AI="$TMP/home-auth-invalid"; mkdir -p "$AI/.config/slp-room"
 printf 'sk-ant-oat01-i\n' > "$AI/.config/slp-room/oauth-token"; printf 'token\n' > "$AI/.config/slp-room/auth-mode"
 if HOME="$AI" SLP_CLAUDE_AUTH_TOKEN=a SLP_CLAUDE_API_KEY=b "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1; then AUTH_OK=0; fi
 [ -f "$AI/.config/slp-room/oauth-token" ] && [ -f "$AI/.config/slp-room/auth-mode" ] && [ ! -e "$AI/.config/slp-room/auth" ] || AUTH_OK=0
+# Symlinked old file: value migrated, link kept. Multi-line old key: first line migrated, file kept.
+# Differing endpoint field with auth present: old file kept, auth wins.
+AL="$TMP/home-auth-link"; mkdir -p "$AL/.config/slp-room"
+printf 'sk-ant-oat01-l\n' > "$AL/real-token"; ln -s "$AL/real-token" "$AL/.config/slp-room/oauth-token"
+auth_run "$AL" 2>/dev/null; [ -L "$AL/.config/slp-room/oauth-token" ] && [ -f "$AL/real-token" ] \
+  && grep -qxF 'token=sk-ant-oat01-l' "$AL/.config/slp-room/auth" || AUTH_OK=0
+AK="$TMP/home-auth-multikey"; mkdir -p "$AK/.config/slp-room"
+printf 'https://gw.example.com\n' > "$AK/.config/slp-room/anthropic-base-url"; printf 'k1\nk2\n' > "$AK/.config/slp-room/anthropic-api-key"
+printf 'endpoint\n' > "$AK/.config/slp-room/auth-mode"
+auth_run "$AK" 2>/dev/null; [ "$(cat "$AK/.config/slp-room/anthropic-api-key")" = "$(printf 'k1\nk2')" ] \
+  && grep -qxF 'key=k1' "$AK/.config/slp-room/auth" && [ ! -e "$AK/.config/slp-room/anthropic-base-url" ] || AUTH_OK=0
+AD="$TMP/home-auth-differ"; mkdir -p "$AD/.config/slp-room"
+printf 'mode=endpoint\nurl=https://new.example.com\nkey=k\nheader=bearer\n' > "$AD/.config/slp-room/auth"
+printf 'https://old.example.com\n' > "$AD/.config/slp-room/anthropic-base-url"
+auth_run "$AD" 2>/dev/null; [ "$(cat "$AD/.config/slp-room/anthropic-base-url")" = https://old.example.com ] \
+  && grep -qxF 'url=https://new.example.com' "$AD/.config/slp-room/auth" || AUTH_OK=0
 AP="$TMP/home-auth-partial"; mkdir -p "$AP/.config/slp-room"; printf 'endpoint\n' > "$AP/.config/slp-room/auth-mode"
 auth_run "$AP"; [ ! -e "$AP/.config/slp-room/auth-mode" ] && grep -qxF 'mode=endpoint' "$AP/.config/slp-room/auth" || AUTH_OK=0
 if [ "$AUTH_OK" = 1 ]; then

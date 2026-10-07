@@ -297,7 +297,8 @@ Which mode applies:
 - A token request that yields no token (Enter, a bad paste, nothing saved)
   keeps the saved endpoint when the saved mode is `endpoint`, and says so.
 - `mode=token` is saved in `auth` only when a token is saved there
-  (pasted, or `--token` with one already there). `SLP_CLAUDE_OAUTH_TOKEN` is
+  (pasted, or `--token` with one already there). An old `auth-mode` file is carried
+  over as is when it migrates, so `mode=token` can arrive without a token, as before. `SLP_CLAUDE_OAUTH_TOKEN` is
   used for that run only, as before, and changes nothing saved.
 - The header form, in order: `SLP_CLAUDE_AUTH_HEADER` if set (which also skips
   the header prompt, like `SLP_CLAUDE_BASE_URL` and `SLP_CLAUDE_AUTH_TOKEN` skip
