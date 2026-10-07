@@ -66,7 +66,7 @@
         "name": "Codex peer",
         "icon": "hammer",
         "provider": "codex-peer",
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6.1-sol",
         "modeId": "full-access",
         "thinkingOptionId": "medium",
         "notes": "Launched by a Lead. Writable Peer from another model family: used when the instruction asks for Codex, or to retry a task a Claude Peer already failed. Not a rung on the tier ladder."
@@ -76,7 +76,7 @@
         "name": "Codex review peer",
         "icon": "eye",
         "provider": "codex-peer",
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6.1-sol",
         "modeId": "full-access",
         "thinkingOptionId": "high",
         "notes": "Launched by a Lead. Read-only Peer from another model family — read-only by its brief, since every room seat runs with full permissions: cross-family review of Claude-written candidates, plan review, committee member, debate tie-breaker.\nNever edits files."
