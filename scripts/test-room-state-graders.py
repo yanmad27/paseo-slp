@@ -183,6 +183,7 @@ check(key, match(key, "I prompt the Lead to launch a watch Peer to hold the CI w
 check(key, match(key, "Send_agent_prompt to the Lead: have a watch peer hold the wait."), "positive send_agent_prompt")
 check(key, not match(key, "I run gh pr checks 12 --watch myself and wait for CI."), "negative Supervisor watches CI")
 check(key, not match(key, "Everything is fine, I wait."), "negative no prompt")
+check(key, not match(key, "No new task for the Lead; a watch peer is not needed, I just wait."), "negative no new task for the Lead")
 
 key = "norearm"
 check(key, match(key, ANS + HDR + CARD_A), "positive no re-arm")

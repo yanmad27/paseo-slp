@@ -259,11 +259,12 @@ return — `timeout`, `idle`, `permission`, `error`, or an interruption:
   Lead's status once more. Running now: wait on it. Still idle: that is an
   unhandled response — prompt the Lead, then wait on it. Never end ✅ in that
   state.
-- External job (CI, deploy): a Lead's `STATUS: waiting on CI` is normally
-  covered by a running watch Peer holding `gh pr checks --watch` /
-  `gh run watch` (PROTOCOL.md, External jobs): wait on it like any running
-  Peer, and its 10-minute re-issues and fix-push re-watches change nothing
-  for you. You never run `gh`, a watch, or any CI command, and never read CI
+- External job (CI, deploy): for a Lead whose last report waits on an
+  external job this bullet takes precedence over the Handoff bullet ("still
+  idle: prompt the Lead"). Its `STATUS: waiting on CI` is normally covered by
+  a running watch Peer holding `gh pr checks --watch` / `gh run watch`
+  (PROTOCOL.md, External jobs): wait on it like any running Peer, and its
+  10-minute re-runs and fix-push re-watches change nothing for you. You never run `gh`, a watch, or any CI command, and never read CI
   logs — Lead and Peer status and the Lead's reports only. If nothing runs
   and a Lead idles on an external-job wait with no watch Peer and no stated
   reason, that is an unhandled response: prompt the Lead, then wait on it. If
@@ -271,8 +272,12 @@ return — `timeout`, `idle`, `permission`, `error`, or an interruption:
   the wait: end the turn on the `🕒 Working` block with the Lead's STATUS row,
   say that no agent can hold the wait and the tab will not spin, and on each
   heartbeat re-read Lead and Peer status once and end the same way. A Lead
-  idle there 10+ minutes gets one prompt to try a watch Peer again; a
-  Lead's `DONE`/`DECISION_NEEDED`/`BLOCKED` is handled as usual.
+  idle there 10+ minutes (its last activity from `get_agent_activity`, or
+  `updatedAt` from `list_agents`/`get_agent_status`) gets one prompt to try
+  a watch Peer again. Record that prompt in that turn's visible text ("asked
+  the Lead to retry a watch Peer") and do not prompt again until the Lead
+  sends a new report: never on every heartbeat, never not at all. A Lead's
+  `DONE`/`DECISION_NEEDED`/`BLOCKED` is handled as usual.
 - The "user doesn't want to proceed / Tool call did not complete" result is
   not a refusal: an event arrived. Handle a Lead or Peer finish or
   permission notification, then re-arm in the same turn; do not stop. A wait
@@ -420,7 +425,8 @@ or the Lead's latest report).
   but its own Lead.
 - Health: an agent running with no activity for 6+ min, no pending
   permission, and no long foreground command (build, tests, `--watch`) in
-  flight (a watch Peer holding `gh pr checks --watch` is healthy) is stalled (`[Committee]`/`[Advisor]` agents: 30 min). A Peer that
+  flight is stalled (`[Committee]`/`[Advisor]` agents: 30 min). A watch
+  Peer is exempt only while its foreground watch call is in flight. A Peer that
   ended while its Lead has not acted since is an unhandled response. A
   Lead's `DONE`, `DECISION_NEEDED`, or `BLOCKED` you have not read — read
   it now; a `DONE` with a Peer still running is invalid.

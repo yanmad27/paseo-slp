@@ -282,33 +282,43 @@ with `STATUS: waiting on CI` and no agent running leaves `slp-wait` no
 target, so the Supervisor stops spinning.
 
 - **Watch Peer.** Lead keeps one Peer — "Cheap peer", the watch is
-  mechanical — holding one foreground blocking command until the job ends:
-  `gh pr checks <pr> --watch` or `gh run watch <id>`, Bash `timeout`
-  600000. A blocked foreground call costs no tokens. While it runs, Lead
-  reports `STATUS: waiting on CI` and ends its turn; the Peer is the running
-  agent the Supervisor waits on. The Peer ends its turn with `REVIEW`: the
-  PR or run, the commit, each check's result, the failing checks' names and
-  run IDs. It does not read logs. A Peer whose brief includes verifying CI
-  holds the same watch itself.
-- **10-minute cap.** A foreground Bash call is capped at 10 minutes
-  (`timeout` 600000) and CI can run longer. If the call returns because of
-  the timeout with checks still pending, the Peer re-issues the same single
-  blocking watch — one call per wait, never a shell loop, never `sleep`,
-  never repeated status calls. At most 6 consecutive re-issues (about an
-  hour) unless the brief sets another bound; then the Peer ends its turn
-  with `REVIEW` ("still pending after N watches") and Lead decides: a new
-  watch, or `DECISION_NEEDED`.
-- **Backgrounded watch.** If the harness moves the call to the background,
-  it no longer holds the Peer's turn. The Peer stops that background task
-  and re-issues the watch in the foreground once, counted as a re-issue. If
-  that is moved to the background too, the turn cannot be held: the Peer
-  stops the task and ends with `BLOCKED` (evidence: the harness moved the
-  watch to the background twice), never leaving a watch running behind a
-  finished turn.
+  mechanical, its brief gives no write scope — holding one foreground
+  blocking command until the job ends: `gh pr checks <pr> --watch
+  --fail-fast --interval 30` or `gh run watch <id> --exit-status --compact
+  --interval 30`, Bash `timeout` 600000. Without `--exit-status`, `gh run
+  watch` exits 0 on a failed run; `--fail-fast` returns as soon as a check
+  fails; the intervals cut the non-TTY reprint volume. The Peer judges the
+  result from the exit code plus the final table, not the stream. A blocked
+  foreground call costs no tokens. While it runs, Lead reports `STATUS:
+  waiting on CI` and ends its turn; the Peer is the running agent the
+  Supervisor waits on. A Peer whose brief includes verifying CI holds the
+  same watch itself.
+- **Result.** The watch form of `REVIEW`: the PR or run, the commit, each
+  check's result, the failing checks' names and run IDs, and the watch
+  count. It carries no candidate to accept; Lead dispositions it by acting
+  on it. The Peer reads no logs.
+- **Cap and re-runs.** A foreground Bash call is capped at its `timeout`
+  (10 minutes), CI can run longer, and the harness does not end the call at
+  the cap: it moves it to the background. At most 7 watch calls in total
+  (the first plus 6 re-runs, about 70 minutes) unless the brief sets
+  another bound; every re-run below counts. Never two watches at once, never
+  a shell loop, `sleep`, or repeated status calls.
+  - The call returned or was backgrounded at about its `timeout` with
+    checks pending: the expected cap. Stop the background task first, then
+    re-run the same single watch.
+  - The call exited at once with "no checks reported" (right after a push):
+    re-run the same single watch.
+  - The call was backgrounded well before its `timeout`: the turn cannot be
+    held. Stop it, retry once, and if that is also backgrounded early, stop
+    it and end with `BLOCKED` (evidence: backgrounded early twice), never
+    leaving a watch running behind a finished turn.
+  - The cap spent with checks still pending: end with `REVIEW` ("still
+    pending after 7 watches"); Lead launches a new watch or reports
+    `DECISION_NEEDED`.
 - **Failure and fix.** Lead hands a failed check's logs to a Peer for
   reading (Lead's investigation hard line) and the fix to a writer Peer; a
   fix push starts a new watch for the new run.
-- **Fallback.** If no Peer can hold the watch (`BLOCKED` above), Lead does
+- **Fallback.** If no Peer can hold the watch (the early-`BLOCKED` above), Lead does
   not idle silently: it reports `STATUS: waiting on <job> — no watch Peer:
   <reason>` with the PR or run ID. Nothing in the room runs then and the
   Supervisor's spinner is off; this is stated, not hidden. The Supervisor

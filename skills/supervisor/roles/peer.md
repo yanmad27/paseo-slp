@@ -114,18 +114,21 @@ End your final message with exactly one line: `RECAP: <what you did> →
   not one Lead started, so Lead would never see its result.
   `slp-wait` is the Supervisor's, never a Peer's.
 - Holding an external-job watch (CI, deploy; PROTOCOL.md, External jobs):
-  run one foreground `gh pr checks <pr> --watch` / `gh run watch <id>` with
-  Bash `timeout` 600000; a foreground call is capped at 10 minutes. If it
-  returns because of the timeout with checks still pending, re-issue the
-  same single watch — one call per wait, never a loop, `sleep`, or repeated
-  status calls — at most 6 consecutive re-issues unless the brief sets
-  another bound, then end with `REVIEW` ("still pending after N watches").
-  If the harness moves the call to the background it no longer holds your
-  turn: stop that task and re-issue in the foreground once; if that is
-  moved too, stop it and end with `BLOCKED`, never leaving a watch behind a
-  finished turn. A finished watch ends with `REVIEW` (PR/run, commit, each
-  check's result, failing checks' names and run IDs) — read no logs unless
-  the brief says so.
+  run one foreground `gh pr checks <pr> --watch --fail-fast --interval 30`
+  / `gh run watch <id> --exit-status --compact --interval 30` with Bash
+  `timeout` 600000, and judge the result from the exit code plus the final
+  table. At most 7 watch calls in total, unless the brief sets another
+  bound; never two at once, never a loop, `sleep`, or repeated status
+  calls. Returned or backgrounded at about the `timeout` with checks
+  pending (the expected 10-minute cap), or exited at once with "no checks
+  reported": stop the background task first, then re-run the same single
+  watch. Backgrounded well before the `timeout`: the turn cannot be held;
+  stop it, retry once, and if it is backgrounded early again, stop it and
+  end with `BLOCKED`, never leaving a watch behind a finished turn. A
+  finished watch (or the 7th spent with checks pending: "still pending after
+  7 watches") ends with `REVIEW` (PR/run, commit, each check's result,
+  failing checks' names and run IDs, watch count; no candidate) — read no
+  logs unless the brief says so.
 - Context budget: plan for a 200k-token window, whatever your model. Grep
   for the spot, then read
   files by range; filter command output at the source (`| tail`, `| grep`,
