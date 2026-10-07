@@ -8,7 +8,7 @@
         "provider": "claude-supervisor",
         "model": "claude-opus-5-5",
         "modeId": "bypassPermissions",
-        "thinkingOptionId": "xhigh",
+        "thinkingOptionId": "high",
         "notes": "The only seat the user talks to. Open it and just describe the goal — the Supervisor role is its system prompt, no /supervisor needed. Pins down intent, launches Lead agents, keeps Leads and Peers on course on a heartbeat, and brings decisions back to the user. Never implements. Do not launch it from another agent."
       },
       {
@@ -18,7 +18,7 @@
         "provider": "claude-lead",
         "model": "claude-opus-5-5",
         "modeId": "bypassPermissions",
-        "thinkingOptionId": "high",
+        "thinkingOptionId": "medium",
         "notes": "Launched by the Supervisor only. Owns one project's technical outcome: plans, dispatches Peer profiles, debates their challenges, reviews, and accepts or rejects candidates. Never implements; never launches another Lead."
       },
       {
@@ -28,7 +28,7 @@
         "provider": "claude-peer",
         "model": "claude-haiku-4-5",
         "modeId": "bypassPermissions",
-        "thinkingOptionId": "medium",
+        "thinkingOptionId": "low",
         "notes": "Launched by a Lead. Extraction, classification, formatting, log triage, renames, doc/comment updates, mechanical refactors, test scaffolding."
       },
       {
@@ -38,7 +38,7 @@
         "provider": "claude-peer",
         "model": "claude-sonnet-5-5",
         "modeId": "bypassPermissions",
-        "thinkingOptionId": "medium",
+        "thinkingOptionId": "low",
         "notes": "Launched by a Lead. DEFAULT for implementation, debugging, multi-file refactors, research, writing."
       },
       {
@@ -48,7 +48,7 @@
         "provider": "claude-peer",
         "model": "claude-opus-5-5",
         "modeId": "bypassPermissions",
-        "thinkingOptionId": "medium",
+        "thinkingOptionId": "low",
         "notes": "Launched by a Lead. Hard problems only: architecture decisions, cross-module refactors with invariants, subtle concurrency/data bugs, tasks where a Peer retry already failed. Chosen by Jev routing or escalation, never as a default."
       },
       {
@@ -58,7 +58,7 @@
         "provider": "claude-peer",
         "model": "claude-sonnet-5-5",
         "modeId": "bypassPermissions",
-        "thinkingOptionId": "high",
+        "thinkingOptionId": "medium",
         "notes": "Launched by a Lead. Read-only Peer — read-only by its brief, since every room seat runs with full permissions: independent review of an exact candidate against its acceptance evidence, architecture questions, committee member.\nNever edits files."
       },
       {
@@ -66,9 +66,9 @@
         "name": "Codex peer",
         "icon": "hammer",
         "provider": "codex-peer",
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6.1-sol",
         "modeId": "full-access",
-        "thinkingOptionId": "medium",
+        "thinkingOptionId": "low",
         "notes": "Launched by a Lead. Writable Peer from another model family: used when the instruction asks for Codex, or to retry a task a Claude Peer already failed. Not a rung on the tier ladder."
       },
       {
@@ -76,9 +76,9 @@
         "name": "Codex review peer",
         "icon": "eye",
         "provider": "codex-peer",
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6.1-sol",
         "modeId": "full-access",
-        "thinkingOptionId": "high",
+        "thinkingOptionId": "medium",
         "notes": "Launched by a Lead. Read-only Peer from another model family — read-only by its brief, since every room seat runs with full permissions: cross-family review of Claude-written candidates, plan review, committee member, debate tie-breaker.\nNever edits files."
       }
     ]

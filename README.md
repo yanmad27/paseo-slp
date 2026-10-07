@@ -174,19 +174,19 @@ it uses the checkout.
 `install.sh` writes eight agent profiles and three providers into
 `~/.paseo/config.json`. Every Lead and Peer seat runs with full permissions
 (Claude `bypassPermissions`, Codex `full-access`); reviewers are read-only
-because their brief says so. Thinking: Supervisor extra high, Lead high,
-review peers high, every other Peer medium.
+because their brief says so. Thinking: Supervisor high, Lead medium,
+review peers medium, every other Peer low.
 
 | Profile | Provider | Model | Mode | Use for |
 |---|---|---|---|---|
-| **Supervisor** | `claude-supervisor` | `claude-opus-5-5` (thinking: xhigh) | `bypassPermissions` | The seat you talk to; the Supervisor role is its system prompt. Extra-high thinking for judging drift; every inspection (each `slp-wait` timeout or heartbeat wake, about every 2 minutes) is a turn at that level. |
-| **Lead** | `claude-lead` | `claude-opus-5-5` (thinking: high) | `bypassPermissions` | Launched by the Supervisor: owns one project's technical outcome, dispatches Peers, accepts or rejects candidates |
-| **Cheap peer** | `claude-peer` | `claude-haiku-4-5` (thinking: medium) | `bypassPermissions` | Extraction, formatting, log triage, mechanical refactors — the down-tier target |
-| **Peer** | `claude-peer` | `claude-sonnet-5-5` (thinking: medium) | `bypassPermissions` | Default tier for implementation, debugging, and research |
-| **Expensive peer** | `claude-peer` | `claude-opus-5-5` (thinking: medium) | `bypassPermissions` | Hard problems only: architecture decisions, cross-module refactors with invariants, subtle concurrency/data bugs — chosen by Jev routing or escalation, never by default |
-| **Review peer** | `claude-peer` | `claude-sonnet-5-5` (thinking: high) | `bypassPermissions` | Read-only Peer: reviews Codex-written candidates (and security-sensitive ones with `security-review`), architecture questions, committee member |
-| **Codex peer** | `codex-peer` | `gpt-5.6-sol` (thinking: medium) | `full-access` | Writable Peer from another model family — only when you ask for Codex, or to retry a task a Claude Peer already failed. Not a tier. |
-| **Codex review peer** | `codex-peer` | `gpt-5.6-sol` (thinking: high) | `full-access` | Read-only cross-family reviewer of Claude-written candidates, plan reviewer, committee member, debate tie-breaker |
+| **Supervisor** | `claude-supervisor` | `claude-opus-5-5` (thinking: high) | `bypassPermissions` | The seat you talk to; the Supervisor role is its system prompt. High thinking for judging drift; every inspection (each `slp-wait` timeout or heartbeat wake, about every 2 minutes) is a turn at that level. |
+| **Lead** | `claude-lead` | `claude-opus-5-5` (thinking: medium) | `bypassPermissions` | Launched by the Supervisor: owns one project's technical outcome, dispatches Peers, accepts or rejects candidates |
+| **Cheap peer** | `claude-peer` | `claude-haiku-4-5` (thinking: low) | `bypassPermissions` | Extraction, formatting, log triage, mechanical refactors — the down-tier target |
+| **Peer** | `claude-peer` | `claude-sonnet-5-5` (thinking: low) | `bypassPermissions` | Default tier for implementation, debugging, and research |
+| **Expensive peer** | `claude-peer` | `claude-opus-5-5` (thinking: low) | `bypassPermissions` | Hard problems only: architecture decisions, cross-module refactors with invariants, subtle concurrency/data bugs — chosen by Jev routing or escalation, never by default |
+| **Review peer** | `claude-peer` | `claude-sonnet-5-5` (thinking: medium) | `bypassPermissions` | Read-only Peer: reviews Codex-written candidates (and security-sensitive ones with `security-review`), architecture questions, committee member |
+| **Codex peer** | `codex-peer` | `gpt-6.1-sol` (thinking: low) | `full-access` | Writable Peer from another model family — only when you ask for Codex, or to retry a task a Claude Peer already failed. Not a tier. |
+| **Codex review peer** | `codex-peer` | `gpt-6.1-sol` (thinking: medium) | `full-access` | Read-only cross-family reviewer of Claude-written candidates, plan reviewer, committee member, debate tie-breaker |
 
 | Provider | Extends | Agent tools |
 |---|---|---|
