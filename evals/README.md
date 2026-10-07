@@ -38,6 +38,11 @@ Cases:
   report is a STATUS and its Peer just finished — the Supervisor re-reads
   the Lead's status and waits on it or prompts it (a `🕒` state, never
   `✅ Done`).
+- `behaviour-wait-external-job`: nothing runs, a Lead idles on `STATUS: waiting
+  on CI` with no watch Peer and no stated reason — the Supervisor prompts the
+  Lead to have a watch Peer hold `gh pr checks --watch`, runs no `gh`/watch/
+  `sleep` itself (`tool_used` max 0 on Bash), and ends on a `🕒` block, never
+  `✅ Done`. The fallback and re-issue rules are guarded by `validate.sh`.
 - `behaviour-wait-no-rearm`: told that `slp-wait` returned at once with no
   timeout and no state change, the Supervisor must not call `slp-wait` again
   (`tool_used` max 0) and must report or decide instead.

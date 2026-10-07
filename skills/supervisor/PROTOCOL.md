@@ -190,7 +190,7 @@ or `❓ Waiting on you` (one row each), or `🕒 Working` (a header row, a `----
 doing or its state>` row per Lead with one `🦾 <short Peer name> · <what it is
 doing>` row per running or permission-pending Peer nested under it, indented
 with the literal ASCII text `&emsp;&ensp;` before each 🦾 row (🤖 rows have no indent), no blank lines, never in a code fence) only after
-answering the person mid-run or when `slp-wait` failed; `🕒 Working` otherwise precedes each
+answering the person mid-run, when `slp-wait` failed, or in the external-job fallback below; `🕒 Working` otherwise precedes each
 `slp-wait` and never ends a turn (see its role). The
 person always sees the state, and no turn ends on a bare acknowledgement.
 For example:
@@ -273,3 +273,50 @@ evidence. Lead inspects the exact artifact and explicitly accepts or rejects
 it. Technical acceptance does not authorize push, merge, deployment, or any
 other external action; Human alone decides product scope, material cost,
 external effects, and irreversible risk.
+
+## External jobs (CI, deploy)
+
+A job that runs outside the room (PR checks, a deploy) is waited on by a
+room agent, never by the Supervisor and never by an idle Lead. An idle Lead
+with `STATUS: waiting on CI` and no agent running leaves `slp-wait` no
+target, so the Supervisor stops spinning.
+
+- **Watch Peer.** Lead keeps one Peer — "Cheap peer", the watch is
+  mechanical — holding one foreground blocking command until the job ends:
+  `gh pr checks <pr> --watch` or `gh run watch <id>`, Bash `timeout`
+  600000. A blocked foreground call costs no tokens. While it runs, Lead
+  reports `STATUS: waiting on CI` and ends its turn; the Peer is the running
+  agent the Supervisor waits on. The Peer ends its turn with `REVIEW`: the
+  PR or run, the commit, each check's result, the failing checks' names and
+  run IDs. It does not read logs. A Peer whose brief includes verifying CI
+  holds the same watch itself.
+- **10-minute cap.** A foreground Bash call is capped at 10 minutes
+  (`timeout` 600000) and CI can run longer. If the call returns because of
+  the timeout with checks still pending, the Peer re-issues the same single
+  blocking watch — one call per wait, never a shell loop, never `sleep`,
+  never repeated status calls. At most 6 consecutive re-issues (about an
+  hour) unless the brief sets another bound; then the Peer ends its turn
+  with `REVIEW` ("still pending after N watches") and Lead decides: a new
+  watch, or `DECISION_NEEDED`.
+- **Backgrounded watch.** If the harness moves the call to the background,
+  it no longer holds the Peer's turn. The Peer stops that background task
+  and re-issues the watch in the foreground once, counted as a re-issue. If
+  that is moved to the background too, the turn cannot be held: the Peer
+  stops the task and ends with `BLOCKED` (evidence: the harness moved the
+  watch to the background twice), never leaving a watch running behind a
+  finished turn.
+- **Failure and fix.** Lead hands a failed check's logs to a Peer for
+  reading (Lead's investigation hard line) and the fix to a writer Peer; a
+  fix push starts a new watch for the new run.
+- **Fallback.** If no Peer can hold the watch (`BLOCKED` above), Lead does
+  not idle silently: it reports `STATUS: waiting on <job> — no watch Peer:
+  <reason>` with the PR or run ID. Nothing in the room runs then and the
+  Supervisor's spinner is off; this is stated, not hidden. The Supervisor
+  inspects only Lead and Peer status — it never runs `gh`, a watch, or any
+  CI command, and never reads CI logs. Its heartbeat turn ends on `🕒 Working`
+  (the Lead's row shows that STATUS) and says that no agent can hold the
+  wait. If the Lead has been idle 10+ minutes in that state, the Supervisor
+  prompts it once to try a watch Peer again. A Lead idle on a wait for an
+  external job with no watch Peer running and no stated reason is an
+  unhandled response: the Supervisor prompts the Lead, like a `DONE` with a
+  Peer running.
