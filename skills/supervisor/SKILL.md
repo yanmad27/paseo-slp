@@ -278,7 +278,13 @@ return — `timeout`, `idle`, `permission`, `error`, or an interruption:
   ("asked the Lead to retry a watch Peer") and send no second prompt until
   the Lead sends a new report: one prompt per idle spell, not one per
   heartbeat. A Lead's `DONE`/`DECISION_NEEDED`/`BLOCKED` is handled as
-  usual.
+  usual. Exception: if the Lead's reason is `checks not registered yet for
+  <sha>` (the post-push registration window), your NEXT heartbeat turn
+  prompts the Lead once to relaunch the watch Peer — no 10-minute wait —
+  written into that turn's visible text; until then each turn ends on
+  `🕒 Working`, saying the tab does not spin (up to one heartbeat slot,
+  normally 2 minutes or less, rarely about 4). One prompt, then none until
+  the Lead reports again.
 - The "user doesn't want to proceed / Tool call did not complete" result is
   not a refusal: an event arrived. Handle a Lead or Peer finish or
   permission notification, then re-arm in the same turn; do not stop. A wait

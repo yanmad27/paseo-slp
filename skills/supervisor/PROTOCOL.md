@@ -309,14 +309,12 @@ target, so the Supervisor stops spinning.
     builds), then re-run the same single watch. This counts toward the 7.
     If the task cannot be stopped, end with `BLOCKED` rather than start a
     second watch.
-  - The call exited at once with "no checks reported" (right after a push,
-    or no checks configured): there is no background task. Re-run the same
-    single watch; these re-runs do not count toward the 7 but have their own
-    bound, at most 3 such calls in total. Lead's own handling time between
-    the push and the watch launch usually covers GitHub's registration.
-    Still none after 3: end with `REVIEW` "no checks registered for <sha>"
-    (not "pending"); Lead decides — CI may not be configured, or it
-    re-launches the watch once.
+  - The call exited at once with "no checks reported" (exit 1, before any
+    watch loop; no gh command blocks until checks or runs appear): there is
+    no background task, and a re-run would return in seconds and cover
+    nothing, so do not re-run. End at once with `REVIEW` "no checks
+    registered yet for <sha>". Lead's own handling time between the push
+    and the watch launch may cover registration, but this is not relied on.
   - The call was backgrounded well before its `timeout`: the turn cannot be
     held. Stop it (as above), retry once, and if that is also backgrounded
     early, stop it and end with `BLOCKED` (evidence: backgrounded early
@@ -337,7 +335,21 @@ target, so the Supervisor stops spinning.
   CI command, and never reads CI logs. Its heartbeat turn ends on `🕒 Working`
   (the Lead's row shows that STATUS) and says that no agent can hold the
   wait. If the Lead has been idle 10+ minutes in that state, the Supervisor
-  prompts it once to try a watch Peer again. A Lead idle on a wait for an
+  prompts it once to try a watch Peer again.
+  - **Registration window.** The few seconds to about a minute after a push,
+    before GitHub registers checks, cannot be held by any room agent without
+    `sleep` or a retry loop: a stated fallback step, not the normal path.
+    On the watch Peer's "no checks registered yet" `REVIEW`, Lead reports
+    `STATUS: waiting on CI — no watch Peer: checks not registered yet for
+    <sha>`. For that reason the Supervisor's next heartbeat turn (not the
+    10-minute rule) prompts the Lead once to relaunch the watch Peer, and
+    until then each turn ends on `🕒 Working`. The no-spinner gap is up to
+    one heartbeat slot: normally 2 minutes or less, rarely about 4. Lead
+    relaunches the watch once; if that again gets "no checks reported",
+    Lead treats the commit as having no CI (path filters, no trigger, or CI
+    not configured) and either proceeds without CI evidence per its
+    acceptance criteria or reports `DECISION_NEEDED`. No further relaunch.
+  - A Lead idle on a wait for an
   external job with no watch Peer running and no stated reason is an
   unhandled response: the Supervisor prompts the Lead, like a `DONE` with a
   Peer running.

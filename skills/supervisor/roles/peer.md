@@ -123,9 +123,9 @@ End your final message with exactly one line: `RECAP: <what you did> →
   pending (the expected 10-minute cap): stop the background task first
   (the background-task stop tool, `TaskStop`; `KillShell` in older builds;
   if it cannot be stopped, end with `BLOCKED`), then re-run the same single
-  watch. Exited at once with "no checks reported": no task to stop; re-run
-  the same single watch, at most 3 such calls in total and not counted in
-  the 7, then end with `REVIEW` "no checks registered for <sha>".
+  watch. Exited at once with "no checks reported": do not re-run (it would
+  return in seconds); end at once with `REVIEW` "no checks registered yet
+  for <sha>".
   Backgrounded well before the `timeout`: the turn cannot be held; stop it,
   retry once, and if it is backgrounded early again, stop it and end with
   `BLOCKED`, never leaving a watch behind a finished turn. A finished

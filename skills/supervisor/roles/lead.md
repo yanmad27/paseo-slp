@@ -437,8 +437,8 @@ Supervisor then has nothing to wait on and its spinner stops. PROTOCOL.md
   the brief: at most 7 watch calls in total; at about the `timeout` with
   checks pending, stop the background task first (`TaskStop`) and re-run the
   same single watch (never two at once, never `sleep`, a loop, or repeated
-  status calls); "no checks reported" → re-run, at most 3 such calls not
-  counted in the 7, then `REVIEW` "no checks registered for <sha>";
+  status calls); "no checks reported" → do not re-run, end at once with
+  `REVIEW` "no checks registered yet for <sha>";
   backgrounded well before the `timeout` → stop, retry once, else end with
   `BLOCKED`; judge by exit
   code plus the final table; do not read logs; end with `REVIEW`. Then
@@ -447,8 +447,12 @@ Supervisor then has nothing to wait on and its spinner stops. PROTOCOL.md
 - On the `REVIEW` (the watch form: no candidate to accept; act on it): all green → continue. A failure → hand the failing run's
   logs to a Peer to read (the investigation hard line), then the fix to a
   writer Peer; a fix push → a new watch Peer for the new run. "No checks
-  registered for <sha>" → CI may not be configured, or re-launch the watch
-  once. "Still pending after 7 watches" → launch a new watch or `DECISION_NEEDED`.
+  registered yet for <sha>" → report `STATUS: waiting on CI — no watch Peer:
+  checks not registered yet for <sha>` and end your turn; the Supervisor's
+  next heartbeat prompts you, then relaunch the watch once. If it again gets
+  "no checks reported", treat the commit as having no CI (path filters, no
+  trigger, or CI not configured): proceed without CI evidence per your
+  acceptance criteria, or `DECISION_NEEDED`. No further relaunch. "Still pending after 7 watches" → launch a new watch or `DECISION_NEEDED`.
 - On `BLOCKED` from a watch Peer, or if no Peer can be launched: report
   `STATUS: waiting on <job> — no watch Peer: <reason>` with the PR or run
   ID, and say the Supervisor's spinner is off. Never leave a bare
