@@ -301,20 +301,31 @@ target, so the Supervisor stops spinning.
   (10 minutes), CI can run longer, and the harness does not end the call at
   the cap: it moves it to the background. At most 7 watch calls in total
   (the first plus 6 re-runs, about 70 minutes) unless the brief sets
-  another bound; every re-run below counts. Never two watches at once, never
-  a shell loop, `sleep`, or repeated status calls.
+  another bound. Never two watches at once, never a shell loop, `sleep`, or
+  repeated status calls.
   - The call returned or was backgrounded at about its `timeout` with
-    checks pending: the expected cap. Stop the background task first, then
-    re-run the same single watch.
-  - The call exited at once with "no checks reported" (right after a push):
-    re-run the same single watch.
+    checks pending: the expected cap. Stop the background task first (with
+    the background-task stop tool, `TaskStop`; `KillShell` in older
+    builds), then re-run the same single watch. This counts toward the 7.
+    If the task cannot be stopped, end with `BLOCKED` rather than start a
+    second watch.
+  - The call exited at once with "no checks reported" (right after a push,
+    or no checks configured): there is no background task. Re-run the same
+    single watch; these re-runs do not count toward the 7 but have their own
+    bound, at most 3 such calls in total. Lead's own handling time between
+    the push and the watch launch usually covers GitHub's registration.
+    Still none after 3: end with `REVIEW` "no checks registered for <sha>"
+    (not "pending"); Lead decides — CI may not be configured, or it
+    re-launches the watch once.
   - The call was backgrounded well before its `timeout`: the turn cannot be
-    held. Stop it, retry once, and if that is also backgrounded early, stop
-    it and end with `BLOCKED` (evidence: backgrounded early twice), never
-    leaving a watch running behind a finished turn.
-  - The cap spent with checks still pending: end with `REVIEW` ("still
+    held. Stop it (as above), retry once, and if that is also backgrounded
+    early, stop it and end with `BLOCKED` (evidence: backgrounded early
+    twice), never leaving a watch running behind a finished turn.
+  - The 7 spent with checks still pending: end with `REVIEW` ("still
     pending after 7 watches"); Lead launches a new watch or reports
     `DECISION_NEEDED`.
+  - `--fail-fast` reports only the first failure; later failures surface on
+    the next run.
 - **Failure and fix.** Lead hands a failed check's logs to a Peer for
   reading (Lead's investigation hard line) and the fix to a writer Peer; a
   fix push starts a new watch for the new run.

@@ -120,13 +120,17 @@ End your final message with exactly one line: `RECAP: <what you did> →
   table. At most 7 watch calls in total, unless the brief sets another
   bound; never two at once, never a loop, `sleep`, or repeated status
   calls. Returned or backgrounded at about the `timeout` with checks
-  pending (the expected 10-minute cap), or exited at once with "no checks
-  reported": stop the background task first, then re-run the same single
-  watch. Backgrounded well before the `timeout`: the turn cannot be held;
-  stop it, retry once, and if it is backgrounded early again, stop it and
-  end with `BLOCKED`, never leaving a watch behind a finished turn. A
-  finished watch (or the 7th spent with checks pending: "still pending after
-  7 watches") ends with `REVIEW` (PR/run, commit, each check's result,
+  pending (the expected 10-minute cap): stop the background task first
+  (the background-task stop tool, `TaskStop`; `KillShell` in older builds;
+  if it cannot be stopped, end with `BLOCKED`), then re-run the same single
+  watch. Exited at once with "no checks reported": no task to stop; re-run
+  the same single watch, at most 3 such calls in total and not counted in
+  the 7, then end with `REVIEW` "no checks registered for <sha>".
+  Backgrounded well before the `timeout`: the turn cannot be held; stop it,
+  retry once, and if it is backgrounded early again, stop it and end with
+  `BLOCKED`, never leaving a watch behind a finished turn. A finished
+  watch (or the 7th spent with checks pending: "still pending after 7
+  watches") ends with `REVIEW` (PR/run, commit, each check's result,
   failing checks' names and run IDs, watch count; no candidate) — read no
   logs unless the brief says so.
 - Context budget: plan for a 200k-token window, whatever your model. Grep

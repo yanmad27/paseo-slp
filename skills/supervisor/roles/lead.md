@@ -435,17 +435,20 @@ Supervisor then has nothing to wait on and its spinner stops. PROTOCOL.md
   `gh pr checks <pr> --watch --fail-fast --interval 30` or `gh run watch
   <id> --exit-status --compact --interval 30`, Bash `timeout` 600000. Say in
   the brief: at most 7 watch calls in total; at about the `timeout` with
-  checks pending, or "no checks reported" right after a push, stop any
-  background task first and re-run the same single watch (never two at once,
-  never `sleep`, a loop, or repeated status calls); backgrounded well before
-  the `timeout` → stop, retry once, else end with `BLOCKED`; judge by exit
+  checks pending, stop the background task first (`TaskStop`) and re-run the
+  same single watch (never two at once, never `sleep`, a loop, or repeated
+  status calls); "no checks reported" → re-run, at most 3 such calls not
+  counted in the 7, then `REVIEW` "no checks registered for <sha>";
+  backgrounded well before the `timeout` → stop, retry once, else end with
+  `BLOCKED`; judge by exit
   code plus the final table; do not read logs; end with `REVIEW`. Then
   report `STATUS: waiting on CI` and end your turn; a running Peer is what
   the Supervisor waits on.
 - On the `REVIEW` (the watch form: no candidate to accept; act on it): all green → continue. A failure → hand the failing run's
   logs to a Peer to read (the investigation hard line), then the fix to a
-  writer Peer; a fix push → a new watch Peer for the new run. "Still
-  pending after 7 watches" → launch a new watch or `DECISION_NEEDED`.
+  writer Peer; a fix push → a new watch Peer for the new run. "No checks
+  registered for <sha>" → CI may not be configured, or re-launch the watch
+  once. "Still pending after 7 watches" → launch a new watch or `DECISION_NEEDED`.
 - On `BLOCKED` from a watch Peer, or if no Peer can be launched: report
   `STATUS: waiting on <job> — no watch Peer: <reason>` with the PR or run
   ID, and say the Supervisor's spinner is off. Never leave a bare
