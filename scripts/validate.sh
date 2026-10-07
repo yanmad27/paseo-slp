@@ -550,7 +550,7 @@ A1="$TMP/home-auth-fresh"; mkdir -p "$A1"
 HOME="$A1" SLP_CLAUDE_BASE_URL=https://gw.example.com SLP_CLAUDE_AUTH_TOKEN=' k e y ' SLP_CLAUDE_AUTH_HEADER=x-api-key \
   "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1 || AUTH_OK=0
 [ "$(ls "$A1/.config/slp-room" | grep -cE '^(auth-mode|oauth-token|anthropic-)')" = 0 ] \
-  && [ "$(stat -f %Lp "$A1/.config/slp-room/auth" 2>/dev/null || stat -c %a "$A1/.config/slp-room/auth")" = 600 ] \
+  && [ "$(stat -c %a "$A1/.config/slp-room/auth" 2>/dev/null || stat -f %Lp "$A1/.config/slp-room/auth")" = 600 ] \
   && grep -qxF 'key=k e y' "$A1/.config/slp-room/auth" || AUTH_OK=0
 for layout in token endpoint; do
   AO="$TMP/home-auth-old-$layout"; AN="$TMP/home-auth-new-$layout"
@@ -576,6 +576,26 @@ AC="$TMP/home-auth-conflict"; mkdir -p "$AC/.config/slp-room"
 printf 'mode=token\ntoken=sk-ant-oat01-new\n' > "$AC/.config/slp-room/auth"; printf 'sk-ant-oat01-old\n' > "$AC/.config/slp-room/oauth-token"
 auth_run "$AC" 2>/dev/null; [ "$(cat "$AC/.config/slp-room/oauth-token")" = sk-ant-oat01-old ] \
   && jq -e '.agents.providers["claude-lead"].env.CLAUDE_CODE_OAUTH_TOKEN == "sk-ant-oat01-new"' "$AC/.paseo/config.json" >/dev/null || AUTH_OK=0
+# Unreadable old file: kept, warned by path, not migrated as empty. A normal migration prints no raw
+# shell errors. An invalid run (two different keys) migrates nothing.
+AU="$TMP/home-auth-unreadable"; mkdir -p "$AU/.config/slp-room"
+printf 'sk-ant-oat01-u\n' > "$AU/.config/slp-room/oauth-token"; printf 'token\n' > "$AU/.config/slp-room/auth-mode"; chmod 000 "$AU/.config/slp-room/oauth-token"
+if [ -r "$AU/.config/slp-room/oauth-token" ]; then :  # running as root: mode 000 is still readable, nothing to test
+else
+  AU_ERR="$(HOME="$AU" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc 2>&1 >/dev/null)" || AUTH_OK=0
+  chmod 600 "$AU/.config/slp-room/oauth-token"
+  [ "$(cat "$AU/.config/slp-room/oauth-token")" = sk-ant-oat01-u ] && ! grep -q '^token=' "$AU/.config/slp-room/auth" \
+    && printf '%s' "$AU_ERR" | grep -qF "$AU/.config/slp-room/oauth-token is not a readable regular file" \
+    && ! printf '%s' "$AU_ERR" | grep -q 'sk-ant-oat01-u' || AUTH_OK=0
+fi
+AQ="$TMP/home-auth-quiet"; mkdir -p "$AQ/.config/slp-room"
+printf 'sk-ant-oat01-q\n' > "$AQ/.config/slp-room/oauth-token"; printf 'token\n' > "$AQ/.config/slp-room/auth-mode"
+AQ_ERR="$(HOME="$AQ" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc 2>&1 >/dev/null)" || AUTH_OK=0
+! printf '%s' "$AQ_ERR" | grep -qE 'No such file|Permission denied|cannot' || AUTH_OK=0
+AI="$TMP/home-auth-invalid"; mkdir -p "$AI/.config/slp-room"
+printf 'sk-ant-oat01-i\n' > "$AI/.config/slp-room/oauth-token"; printf 'token\n' > "$AI/.config/slp-room/auth-mode"
+if HOME="$AI" SLP_CLAUDE_AUTH_TOKEN=a SLP_CLAUDE_API_KEY=b "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1; then AUTH_OK=0; fi
+[ -f "$AI/.config/slp-room/oauth-token" ] && [ -f "$AI/.config/slp-room/auth-mode" ] && [ ! -e "$AI/.config/slp-room/auth" ] || AUTH_OK=0
 AP="$TMP/home-auth-partial"; mkdir -p "$AP/.config/slp-room"; printf 'endpoint\n' > "$AP/.config/slp-room/auth-mode"
 auth_run "$AP"; [ ! -e "$AP/.config/slp-room/auth-mode" ] && grep -qxF 'mode=endpoint' "$AP/.config/slp-room/auth" || AUTH_OK=0
 if [ "$AUTH_OK" = 1 ]; then

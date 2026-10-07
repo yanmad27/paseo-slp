@@ -131,7 +131,8 @@ if [ "$DO_GC" = 1 ]; then
 fi
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+AUTH_TMP=""
+trap 'rm -rf "$WORK"; [ -z "$AUTH_TMP" ] || rm -f "$AUTH_TMP"' EXIT
 
 # Source: this checkout, or the repository tarball when piped.
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ] \
@@ -158,10 +159,16 @@ VERSION="$(tr -d '[:space:]' < "$SRC/version.txt")"
 # file is deleted, but only when its value is now in auth (or it was empty). So a partial old
 # layout migrates what exists, as is. If auth already exists it wins: an old file whose value
 # differs is left untouched with a warning, never deleted, so no credential is lost silently.
-# An old key file with more than its first line is also kept. A second run changes nothing.
+# An old key file with more than its first line is also kept; so is an old file that cannot be
+# read (permissions, other owner), a symbolic link, or anything but a regular file: each is
+# reported by path with a warning, never deleted, never migrated as if empty. A second run
+# changes nothing. Migration runs only after the arguments and SLP_CLAUDE_* values below are
+# validated, so a run that exits on invalid input changes nothing. auth is rewritten whole from
+# the fields above: any other line in it is not kept, and a symlinked auth is replaced by a
+# regular file.
 # Rules: SLP_CLAUDE_* and --token / --endpoint pick the mode, else the saved one (default
 # token). --token with no token, or --endpoint with no complete endpoint, keeps what is
-# saved. auth-mode=token is saved only with a saved token; SLP_CLAUDE_OAUTH_TOKEN is used
+# saved. mode=token is saved in auth only with a saved token; SLP_CLAUDE_OAUTH_TOKEN is used
 # for one run and never persisted. Asking for both kinds at once is an error. Prompts read
 # /dev/tty, which still works when piped. The key is never taken from an argument.
 OAUTH_TOKEN=""; BASE_URL=""; API_KEY=""; ENDPOINT_KEY_VAR=""
@@ -192,55 +199,73 @@ if [ "$DO_PASEO" = 1 ]; then
     local tmp
     mkdir -p "$ROOM_HOME"
     tmp="$(umask 077 && mktemp "$ROOM_HOME/.auth.XXXXXX")"
+    AUTH_TMP="$tmp"  # removed by the EXIT trap if anything below fails or is interrupted
     {
-      [ -z "$A_MODE" ] || printf 'mode=%s\n' "$A_MODE"
-      [ -z "$A_TOKEN" ] || printf 'token=%s\n' "$A_TOKEN"
-      [ -z "$A_URL" ] || printf 'url=%s\n' "$A_URL"
-      [ -z "$A_KEY" ] || printf 'key=%s\n' "$A_KEY"
-      [ -z "$A_HDR" ] || printf 'header=%s\n' "$A_HDR"
-    } > "$tmp"
-    chmod 600 "$tmp"
-    if [ -f "$AUTH_FILE" ] && cmp -s "$tmp" "$AUTH_FILE"; then rm -f "$tmp"; chmod 600 "$AUTH_FILE"
-    else mv -f "$tmp" "$AUTH_FILE"; fi
+      {
+        [ -z "$A_MODE" ] || printf 'mode=%s\n' "$A_MODE"
+        [ -z "$A_TOKEN" ] || printf 'token=%s\n' "$A_TOKEN"
+        [ -z "$A_URL" ] || printf 'url=%s\n' "$A_URL"
+        [ -z "$A_KEY" ] || printf 'key=%s\n' "$A_KEY"
+        [ -z "$A_HDR" ] || printf 'header=%s\n' "$A_HDR"
+      } > "$tmp" && chmod 600 "$tmp" \
+        && if [ -f "$AUTH_FILE" ] && cmp -s "$tmp" "$AUTH_FILE"; then rm -f "$tmp"; chmod 600 "$AUTH_FILE"
+           else mv -f "$tmp" "$AUTH_FILE"; fi
+    } || { rm -f "$tmp"; AUTH_TMP=""; echo "Could not write $AUTH_FILE." >&2; exit 1; }
+    AUTH_TMP=""
   }
   # Fold the five old files into $AUTH_FILE (rules in the comment above).
   auth_migrate() {
-    local f new first n_old=0
+    local f new warn_path n_old=0
     for f in auth-mode oauth-token anthropic-base-url anthropic-api-key anthropic-auth-header; do
-      [ -e "$ROOM_HOME/$f" ] && n_old=$((n_old + 1))
+      [ -e "$ROOM_HOME/$f" ] || [ -L "$ROOM_HOME/$f" ] && n_old=$((n_old + 1))
     done
     [ "$n_old" -gt 0 ] || return 0
     auth_load
     local had_auth=0; [ -f "$AUTH_FILE" ] && had_auth=1
-    old_val() {  # old_val <file> → the value the old rules read from it
+    # old_read <file>: read it once with the old rules. Fails (touching nothing) unless it is a
+    # readable regular file (or a link to one). Sets OLD_V (the value) and OLD_ALL (all its
+    # non-whitespace text), so the empty test and the equality test use the same read.
+    old_read() {
+      local p="$ROOM_HOME/$1"
+      OLD_V=""; OLD_ALL=""
+      [ -f "$p" ] && [ -r "$p" ] && { : < "$p"; } 2>/dev/null || return 1
+      OLD_ALL="$(tr -d '[:space:]' < "$p" 2>/dev/null)" || return 1
       case "$1" in
-        anthropic-api-key) first=""; IFS= read -r first < "$ROOM_HOME/$1" || true; printf '%s' "$first" ;;
-        *) tr -d '[:space:]' < "$ROOM_HOME/$1" ;;
+        anthropic-api-key) { IFS= read -r OLD_V || true; } < "$p" 2>/dev/null ;;
+        *) OLD_V="$OLD_ALL" ;;
       esac
     }
-    local v
-    v="$(old_val auth-mode)" 2>/dev/null || v=""; [ -n "$A_MODE" ] || A_MODE="$v"
-    v="$(old_val oauth-token)" 2>/dev/null || v=""; [ -n "$A_TOKEN" ] || A_TOKEN="$v"
-    v="$(old_val anthropic-base-url)" 2>/dev/null || v=""; [ -n "$A_URL" ] || A_URL="$v"
-    v="$(old_val anthropic-api-key)" 2>/dev/null || v=""; [ -n "$A_KEY" ] || A_KEY="$v"
-    v="$(old_val anthropic-auth-header)" 2>/dev/null || v=""; [ -n "$A_HDR" ] || A_HDR="$v"
+    old_field() { case "$1" in
+      auth-mode) new="$A_MODE" ;; oauth-token) new="$A_TOKEN" ;; anthropic-base-url) new="$A_URL" ;;
+      anthropic-api-key) new="$A_KEY" ;; *) new="$A_HDR" ;; esac; }
+    for f in auth-mode oauth-token anthropic-base-url anthropic-api-key anthropic-auth-header; do
+      old_read "$f" || continue
+      old_field "$f"
+      [ -z "$new" ] || continue
+      case "$f" in
+        auth-mode) A_MODE="$OLD_V" ;; oauth-token) A_TOKEN="$OLD_V" ;; anthropic-base-url) A_URL="$OLD_V" ;;
+        anthropic-api-key) A_KEY="$OLD_V" ;; *) A_HDR="$OLD_V" ;;
+      esac
+    done
     if [ -n "$A_MODE$A_TOKEN$A_URL$A_KEY$A_HDR" ]; then
       auth_write
       auth_load  # what is on disk now is what is compared below
     fi
     for f in auth-mode oauth-token anthropic-base-url anthropic-api-key anthropic-auth-header; do
-      [ -e "$ROOM_HOME/$f" ] || continue
-      v="$(old_val "$f")" 2>/dev/null || v=""
-      case "$f" in
-        auth-mode) new="$A_MODE" ;; oauth-token) new="$A_TOKEN" ;; anthropic-base-url) new="$A_URL" ;;
-        anthropic-api-key) new="$A_KEY" ;; *) new="$A_HDR" ;;
-      esac
-      if [ -f "$ROOM_HOME/$f" ] && [ ! -L "$ROOM_HOME/$f" ] \
-        && { [ -z "$(tr -d '[:space:]' < "$ROOM_HOME/$f")" ] || { [ "$v" = "$new" ] \
-          && [ "$(tr -d '[:space:]' < "$ROOM_HOME/$f")" = "$(printf '%s' "$v" | tr -d '[:space:]')" ]; }; }; then
-        rm -f "$ROOM_HOME/$f"
+      warn_path="$ROOM_HOME/$f"
+      [ -e "$warn_path" ] || [ -L "$warn_path" ] || continue
+      if ! old_read "$f"; then
+        echo "WARNING: $warn_path is not a readable regular file; left in place and not migrated. Fix it or move its value into $AUTH_FILE." >&2
+        continue
+      fi
+      old_field "$f"
+      if [ -L "$warn_path" ]; then
+        if [ "$OLD_V" = "$new" ]; then echo "WARNING: $warn_path is a symbolic link; its value is already in $AUTH_FILE, link left in place. Remove it yourself." >&2
+        else echo "WARNING: $warn_path is a symbolic link whose value is not in $AUTH_FILE; left in place, not deleted." >&2; fi
+      elif [ -z "$OLD_ALL" ] || { [ "$OLD_V" = "$new" ] && [ "$OLD_ALL" = "$(printf '%s' "$OLD_V" | tr -d '[:space:]')" ]; }; then
+        rm -f "$warn_path"
       else
-        echo "WARNING: $ROOM_HOME/$f differs from or goes beyond $AUTH_FILE; left in place, $AUTH_FILE wins. Delete it once you no longer need it." >&2
+        echo "WARNING: $warn_path differs from or goes beyond $AUTH_FILE; left in place, $AUTH_FILE wins. Delete it once you no longer need it." >&2
       fi
     done
     [ "$had_auth" = 1 ] || [ ! -f "$AUTH_FILE" ] || echo "Moved the saved auth into $AUTH_FILE"
@@ -254,8 +279,6 @@ if [ "$DO_PASEO" = 1 ]; then
   }
   redact_url() { sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@#\1***@#'; }
   key_ok() { case "$1" in ""|*$'\n'*|*$'\r'*) return 1 ;; esac; }
-  auth_migrate
-  auth_load
 
   ENV_TOKEN="${SLP_CLAUDE_OAUTH_TOKEN:-}"
   EP_URL="${SLP_CLAUDE_BASE_URL:-}"
@@ -283,6 +306,8 @@ if [ "$DO_PASEO" = 1 ]; then
     echo "  (--endpoint, SLP_CLAUDE_BASE_URL / SLP_CLAUDE_AUTH_TOKEN / SLP_CLAUDE_AUTH_HEADER), not both." >&2
     exit 1
   fi
+  auth_migrate  # only now: everything above can still exit 1 without changing anything
+  auth_load
   HAS_TTY=0
   if [ -t 2 ] && { : < /dev/tty; } 2>/dev/null; then HAS_TTY=1; fi
   TOKEN_FLAG="$ASK_TOKEN"
