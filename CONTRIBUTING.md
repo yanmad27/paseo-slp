@@ -39,7 +39,7 @@ Invariants it checks:
   Claude runtime per Lead/Peer seat (role as output style, the user's
   settings with this plugin disabled, every skill but `supervisor`) and the
   Codex launcher (`-c developer_instructions` before `app-server`); puts the
-  token from `oauth-token` into the provider env, or drops the key without
+  token from the single `auth` file into the provider env, or drops the key without
   one; leaves no `@@` placeholder and keeps the config at mode 600; migrates
   a v1 config — resets the room's profiles/providers, removes v1 profiles
   and `claude-worker`, keeps the user's own, idempotent; `--skill-only`
