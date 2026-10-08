@@ -133,12 +133,12 @@ End your final message with exactly one line: `RECAP: <what you did> →
   watches") ends with `REVIEW` (PR/run, commit, each check's result,
   failing checks' names and run IDs, watch count; no candidate) — read no
   logs unless the brief says so.
-- Context budget: plan for a 200k-token window, whatever your model. Grep
-  for the spot, then read
-  files by range; filter command output at the source (`| tail`, `| grep`,
-  `--quiet`); never dump whole large files or full logs. If the task clearly
-  will not fit, stop before editing and reply `BLOCKED` with a proposed
-  split instead.
+- Context budget: work within ~200k tokens, whatever your model — the real
+  window is larger, but recall degrades and cost rises as context grows.
+  Grep for the spot, then read files by range; filter command output at the
+  source (`| tail`, `| grep`, `--quiet`); never dump whole large files or
+  full logs. If the task clearly will not fit, stop before editing and reply
+  `BLOCKED` with a proposed split instead.
 - Shared working tree: other agents and the user may have uncommitted
   changes here. Never run `git stash`, `git checkout -- <path>`,
   `git restore`, `git reset`, or `git clean`, and never switch branches,

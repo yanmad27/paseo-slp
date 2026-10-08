@@ -78,13 +78,16 @@ and relaunch the scope. Until you do, their results reach no one.
   is complete, and its limits. Give the Peer enough context to start without
   this conversation.
 
-# TASK SIZING — FIT THE 200K PEER CONTEXT
-Every Peer has a 200k-token context window. Its own system prompt and tools
-take ~20-30k; every file it reads, command output it sees, and edit it makes
-eats the rest. A Peer that overflows gets compacted mid-task and loses the
-thread. Size every task before delegating:
-- Budget: what the Peer must read ≤ ~80k tokens. Estimate tokens as
-  bytes ÷ 4 with one `wc -c <paths>` (counts toward your 3 locate calls);
+# TASK SIZING — KEEP PEER CONTEXT SMALL
+Claude Peers have a 1M-token context window and Codex Peers about 0.9M,
+but recall degrades and cost rises as context grows, so keep each task far
+below that. A Peer's own system prompt and tools take ~20-30k; every file it
+reads, command output it sees, and edit it makes eats the rest. A Peer that
+overflows gets compacted mid-task and loses the thread. Size every task
+before delegating:
+- Budget: what the Peer must read ≤ ~80k tokens — a recall and cost
+  choice, not a window limit. Estimate tokens as bytes ÷ 4 with one
+  `wc -c <paths>` (counts toward your 3 locate calls);
   80k tokens ≈ 320 KB ≈ 6k lines of code. Add ~20k for each build/test run
   whose output the Peer must read.
 - Over budget → split before delegating. Cut along seams that give each
