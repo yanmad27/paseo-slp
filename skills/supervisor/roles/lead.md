@@ -129,9 +129,9 @@ If no profile fits, call `list_models` for the `claude-peer` provider, pick
 from what is listed, and say so in your report.
 
 Tier order:
-1. "Cheap peer" (haiku) — extraction, classification, formatting, log
-   triage, renames, docs/comment updates, mechanical refactors, test
-   scaffolds.
+1. "Cheap peer" (haiku) — extraction, classification, summaries of supplied
+   text, formatting, log triage, renames, docs/comment updates, mechanical
+   refactors, test scaffolds.
 2. "Peer" (sonnet) — DEFAULT for everything else.
 3. "Expensive peer" (opus) — architecture, cross-module refactors with
    invariants, subtle bugs; only when Jev picks it or via escalation.
@@ -167,12 +167,12 @@ If `$JEV` is set, pipe ONE request per task before delegating, `state: { task: "
       },
       "criteria": {
         "cheap_peer": {
-          "what": "Mechanical, low-ambiguity work whose correct output is fully determined by the instructions: extraction, classification, formatting, renames, log triage, doc/comment edits, mechanical refactors, test scaffolds",
+          "what": "Mechanical, low-ambiguity work whose correct output is fully determined by the instructions and the supplied input: extraction, classification, summarizing or condensing supplied text, formatting, renames, log triage, doc/comment edits, mechanical refactors, test scaffolds",
           "not_for": "peer, expensive_peer",
-          "examples": ["rename UserSvc to UserService across the repo", "split this README code block into two numbered steps", "summarize these CI logs"]
+          "examples": ["rename UserSvc to UserService across the repo", "split this README code block into two numbered steps", "summarize these CI logs", "condense this meeting transcript into a list of decisions"]
         },
         "peer": {
-          "what": "Work that requires understanding or producing behaviour: implementing or debugging code, multi-file changes with invariants, research with judgement, writing new prose from scratch",
+          "what": "Work that requires understanding or producing behaviour: implementing or debugging code, multi-file changes with invariants, research with judgement (finding and weighing sources, not condensing supplied text), writing new prose from scratch",
           "not_for": "cheap_peer, expensive_peer",
           "examples": ["add rate limiting to POST /login", "find out why install.sh fails when piped", "write the Upgrade section from the docs"]
         },
