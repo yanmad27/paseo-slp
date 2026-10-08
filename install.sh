@@ -756,9 +756,10 @@ if [ "$DO_PASEO" = 1 ]; then
           | with_entries(if (.key | test("^(paseo-slp|orchestrate)@")) then .value = false else . end))
     ' > "$RUNTIME/settings.json"
     if [ "$JEV" = 0 ]; then
-      # Jev off, seats only: ask-jev disabled and its hooks removed; the user's own settings.json is only read.
-      jq '
+      # Jev off, seats only: ask-jev disabled, its hooks removed, and the unfiltered ~/.claude/CLAUDE.md excluded from the ancestor walk; the user's own settings.json is only read.
+      jq --arg md "$CLAUDE_HOME/CLAUDE.md" '
         .enabledPlugins = ((.enabledPlugins // {}) | .["ask-jev@ask-jev"] = false)
+        | .claudeMdExcludes = (((.claudeMdExcludes | if type == "array" then . else [] end) + [$md]) | unique)
         | if (.env | type) == "object" then .env |= with_entries(select(.key | test("jev"; "i") | not)) else . end
         | if (.extraKnownMarketplaces | type) == "object" then .extraKnownMarketplaces |= with_entries(select(.key | test("jev"; "i") | not)) else . end
         | if (.permissions | type) == "object" and (.permissions.allow | type) == "array" then
