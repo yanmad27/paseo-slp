@@ -23,6 +23,7 @@ or writes code.
 - [Quick start](#quick-start)
 - [Install](#install)
 - [Paseo configuration](#paseo-configuration)
+- [Jev switch](#jev-switch)
 - [Restart & verify](#restart--verify)
 - [Upgrade](#upgrade)
 - [slp-gc](#slp-gc)
@@ -43,7 +44,7 @@ Peer → Lead         signals at turn end, plus mid-work messages
 | Seat | Owns | Never |
 |---|---|---|
 | **Supervisor** (the Supervisor profile, or `/supervisor`) | Your only point of contact. Pins down your intent (outcome, non-goals, authority, acceptance evidence), launches Leads, checks each Lead's plan against that intent, watches the room on a Paseo heartbeat for drift — wrong target, scope creep, rabbit holes, unauthorized actions, acceptance without evidence, open loops — questions the Lead with evidence, and brings product/cost/risk decisions back to you | Edits code, runs validation, accepts work, talks to Peers, or asks a healthy Lead for reports |
-| **Lead** | One project's technical outcome inside the course the Supervisor set: plan, Peer tiering (Jev), plan review, committee, independent review, explicit `ACCEPT`/`REJECT` of each candidate | Implements, launches another Lead, or changes what you get without asking |
+| **Lead** | One project's technical outcome inside the course the Supervisor set: plan, Peer tiering (Jev, when on), plan review, committee, independent review, explicit `ACCEPT`/`REJECT` of each candidate | Implements, launches another Lead, or changes what you get without asking |
 | **Peer** (Claude or Codex) | One bounded outcome in one write scope, with its own proof — or a read-only review. Talks with its Lead both ways | Spawns or coordinates agents, talks to anyone but its Lead, or accepts its own work |
 
 **Lead ⇄ Peer.** A Peer reports at the end of its turn, and can also message
@@ -72,7 +73,7 @@ A target project can add local rules in its own `docs/WORKSPACE_PROTOCOL.md`.
 - Claude Code with a subscription (for `claude setup-token`), and the Codex CLI for the Codex Peers
 - Paseo, with the daemon config described below
 - `jq` and `curl` (used by `install.sh`)
-- Optional: the [`ask-jev`](https://github.com/yanmad27/ask-jev) Claude Code plugin — when installed, each Lead uses it to pick the Peer tier and to gate escalation; without it, the manual routing rules apply.
+- Optional, off by default: the [`ask-jev`](https://github.com/yanmad27/ask-jev) Claude Code plugin. Turn it on with `install.sh --jev` (see [Jev switch](#jev-switch)); each Lead then uses it to pick the Peer tier and to gate escalation. Off, the manual routing rules apply.
 
 Enable Paseo MCP tool injection in `~/.paseo/config.json`:
 
@@ -183,7 +184,7 @@ review peers medium, every other Peer low.
 | **Lead** | `claude-lead` | `claude-opus-5-5` (thinking: medium) | `bypassPermissions` | Launched by the Supervisor: owns one project's technical outcome, dispatches Peers, accepts or rejects candidates |
 | **Cheap peer** | `claude-peer` | `claude-haiku-5-5` (thinking: low) | `bypassPermissions` | Extraction, classification, summaries of supplied text, formatting, log triage, mechanical refactors — the down-tier target |
 | **Peer** | `claude-peer` | `claude-sonnet-5-5` (thinking: low) | `bypassPermissions` | Default tier for implementation, debugging, and research |
-| **Expensive peer** | `claude-peer` | `claude-opus-5-5` (thinking: low) | `bypassPermissions` | Hard problems only: architecture decisions, cross-module refactors with invariants, subtle concurrency/data bugs — chosen by Jev routing or escalation, never by default |
+| **Expensive peer** | `claude-peer` | `claude-opus-5-5` (thinking: low) | `bypassPermissions` | Hard problems only: architecture decisions, cross-module refactors with invariants, subtle concurrency/data bugs — chosen by Jev routing (when Jev is on) or escalation, never by default |
 | **Review peer** | `claude-peer` | `claude-sonnet-5-5` (thinking: medium) | `bypassPermissions` | Read-only Peer: reviews Codex-written candidates (and security-sensitive ones with `security-review`), architecture questions, committee member |
 | **Codex peer** | `codex-peer` | `gpt-6.1-sol` (thinking: low) | `full-access` | Writable Peer from another model family — only when you ask for Codex, or to retry a task a Claude Peer already failed. Not a tier. |
 | **Codex review peer** | `codex-peer` | `gpt-6.1-sol` (thinking: medium) | `full-access` | Read-only cross-family reviewer of Claude-written candidates, plan reviewer, committee member, debate tie-breaker |
@@ -306,6 +307,42 @@ Which mode applies:
   what the next rules give); otherwise `bearer` when `SLP_CLAUDE_BASE_URL` is
   set; otherwise the saved one; otherwise `bearer`. Rotating only
   `SLP_CLAUDE_AUTH_TOKEN` keeps the saved header.
+
+### Jev switch
+
+Jev (`ask-jev`) is optional and **off by default**. `install.sh --jev` turns it
+on, `install.sh --no-jev` turns it off; the choice is saved as `SLP_JEV=1|0`
+in `~/.config/slp-room/room.conf` and kept by every later run. Passing both
+flags is an error.
+
+With Jev off:
+
+- The Lead and Supervisor prompts use the manual tier rule, and the Expensive
+  peer is reached only through escalation.
+- Each Claude seat's own `settings.json` disables the `ask-jev` plugin and
+  drops its hooks (Paseo's hooks stay).
+- Each Claude seat gets a filtered copy of `~/.claude/CLAUDE.md` with the
+  sentences, list items, table rows, sections and code fences that mention
+  Jev removed (with Jev on it is a symlink to your file).
+- Seats run under your home directory, and Claude Code also loads `CLAUDE.md`
+  files from the working directory's ancestors. So each seat's `settings.json`
+  adds `~/.claude/CLAUDE.md` to `claudeMdExcludes`, and the seat sees only its
+  filtered copy. Your own `claudeMdExcludes` entries are kept.
+
+The generated copy has mode 600, and a stale one is removed when
+`~/.claude/CLAUDE.md` no longer exists. A seat `CLAUDE.md` you wrote yourself
+(no generated header) is left alone with a warning.
+
+Your `~/.claude` is never written. Re-run `install.sh` after editing
+`~/.claude/CLAUDE.md` or changing the switch.
+
+Limits: only `~/.claude/CLAUDE.md` is filtered — project `CLAUDE.md` files outside
+`~/.claude` and `@imports` are not. A `CLAUDE.md` made entirely of Jev content makes the off
+install fail with an error. The seat `settings.json` keeps the
+`"ask-jev@ask-jev": false` key, because that is how the plugin is disabled,
+and any of your own `permissions.deny` / `permissions.ask` entries that
+mention Jev: removing a deny or ask rule would loosen a restriction, so those
+are the only other Jev text left there.
 
 ### What the installer owns
 
@@ -623,7 +660,7 @@ interrupting their work.
 | `/supervisor why does CI keep timing out on main?` | 1 Lead → **Peer** (investigate) → **Peer** (fix) → **Codex review peer** |
 | `/supervisor fix the flaky upload test — use Codex for this one` | 1 Lead → **Codex peer** → **Review peer** (Claude reviews Codex's work) |
 | `/supervisor migrate the API to v2 and update the web client` | 2 Leads (API, web) in separate worktrees, the web Lead waiting on the API's accepted contract |
-| `/supervisor find the race condition causing duplicate webhook deliveries` | 1 Lead → **Expensive peer** (Jev-routed) → **Codex review peer** + **Review peer** |
+| `/supervisor find the race condition causing duplicate webhook deliveries` | 1 Lead → **Expensive peer** (Jev-routed when Jev is on) → **Codex review peer** + **Review peer** |
 
 ### What happens
 
@@ -636,7 +673,7 @@ interrupting their work.
    idle), waits on the running room agent so its own tab shows the room
    running, and checks each Lead's plan against your intent as soon as the
    Lead reports it.
-3. Each Lead plans, picks a Peer tier per task (Jev or the manual rule), gets
+3. Each Lead plans, picks a Peer tier per task (Jev when on, else the manual rule), gets
    a plan review for larger plans, and dispatches Peers with a brief that
    names their write scope and acceptance evidence.
 4. Peers either deliver a `CANDIDATE` or challenge the brief; the Lead
