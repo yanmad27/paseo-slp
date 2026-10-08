@@ -490,6 +490,9 @@ mk_jev_home() {
   mkdir -p "$h/bin" "$h/.claude/skills/supervisor" "$h/.claude/skills/other" "$h/.config/slp-room" "$h/.codex"
   cat > "$h/.claude/settings.json" <<'JSON'
 {"theme": "dark", "enabledPlugins": {"ask-jev@ask-jev": true, "x@y": true},
+ "env": {"ASK_JEV_GATES": "1", "KEEP_ME": "1"},
+ "extraKnownMarketplaces": {"ask-jev": {"source": {"source": "github", "repo": "o/ask-jev"}}, "other": {"source": {"source": "github", "repo": "o/other"}}},
+ "permissions": {"allow": ["Bash(node /p/ask-jev/bin/jev.mjs:*)", "Bash(ls:*)"], "deny": ["Bash(jev-deny:*)", "Bash(rm:*)"], "ask": ["Bash(jev-ask:*)"]},
  "hooks": {
   "PreToolUse": [
    {"matcher": "", "hooks": [{"type": "command", "command": "node /p/ask-jev/1.5.0/hooks/ask-jev.mjs"}]},
@@ -578,8 +581,13 @@ if jev_install "$JH" >/dev/null 2>&1; then
         and ([.hooks.Stop[].hooks[].command? | select(. != null and contains("paseo hooks claude Stop"))] | length) == 1
         and ([.hooks.Stop[].hooks[] | select(has("command") | not)] | length) == 1
         and (.hooks | has("Only") | not)' "$JROOM/$s/settings.json" >/dev/null || JEV_SET_OK=0
-    # the ask-jev@ask-jev key is the one allowed jev match in a seat settings.json
-    [ "$(jq -c 'del(.enabledPlugins["ask-jev@ask-jev"])' "$JROOM/$s/settings.json" | grep -ci jev || true)" = 0 ] || JEV_SET_OK=0
+    jq -e '(.env | has("ASK_JEV_GATES") | not) and .env.KEEP_ME == "1"
+        and (.extraKnownMarketplaces | has("ask-jev") | not) and (.extraKnownMarketplaces | has("other"))
+        and .permissions.allow == ["Bash(ls:*)"]
+        and .permissions.deny == ["Bash(jev-deny:*)", "Bash(rm:*)"] and .permissions.ask == ["Bash(jev-ask:*)"]' \
+      "$JROOM/$s/settings.json" >/dev/null || JEV_SET_OK=0
+    # the only jev text left: the ask-jev@ask-jev key and the user's own deny/ask entries (kept, never loosened)
+    [ "$(jq -c 'del(.enabledPlugins["ask-jev@ask-jev"], .permissions.deny, .permissions.ask)' "$JROOM/$s/settings.json" | grep -ci jev || true)" = 0 ] || JEV_SET_OK=0
   done
   if [ "$JEV_SET_OK" = 1 ]; then
     ok "install.sh (Jev off) disables ask-jev and drops its hooks in seat settings, keeping Paseo hooks and no-command entries"
@@ -630,7 +638,9 @@ if jev_install "$JH" --jev >/dev/null 2>&1; then
   grep -qF 'Tier decision via ask-jev' "$JH/.claude/skills/supervisor/roles/lead.md" || JEV_ON_OK=0
   for s in $JSEATS; do
     jq -e '.enabledPlugins["ask-jev@ask-jev"] == true and .enabledPlugins["x@y"] == true
-        and ([.. | strings | select(test("ask-jev\\.mjs"))] | length) >= 1' "$JROOM/$s/settings.json" >/dev/null || JEV_ON_OK=0
+        and ([.. | strings | select(test("ask-jev\\.mjs"))] | length) >= 1
+        and .env.ASK_JEV_GATES == "1" and (.extraKnownMarketplaces | has("ask-jev"))
+        and (.permissions.allow | length) == 2' "$JROOM/$s/settings.json" >/dev/null || JEV_ON_OK=0
     [ "$(readlink "$JROOM/$s/CLAUDE.md")" = "$JH/.claude/CLAUDE.md" ] || JEV_ON_OK=0
   done
   # byte-identity of the room copy of lead.md against the sources filtered for on
@@ -668,6 +678,41 @@ if [ "$JEV_FLAGS_OK" = 1 ]; then
   ok "install.sh rejects --jev with --no-jev (either order), SLP_JEV=2, and a symlinked room.conf"
 else
   fail "install.sh accepted conflicting Jev flags, an invalid SLP_JEV, or a symlinked room.conf"
+fi
+
+# Seat CLAUDE.md lifecycle (Jev off): mode 600; a stale generated copy goes when ~/.claude/CLAUDE.md is
+# gone; a user-owned regular file (no header) is left alone with a WARNING in both modes.
+cp "$JH/.claude/CLAUDE.md" "$TMP/sw-claude-md.bak"
+jev_install "$JH" --no-jev >/dev/null 2>&1 || true
+JEV_MODE_OK=1
+for s in $JSEATS; do [ "$(ls -l "$JROOM/$s/CLAUDE.md" | cut -c1-10)" = "-rw-------" ] || JEV_MODE_OK=0; done
+if [ "$JEV_MODE_OK" = 1 ]; then
+  ok "install.sh (Jev off) writes the generated seat CLAUDE.md with mode 600"
+else
+  fail "install.sh (Jev off) generated seat CLAUDE.md is not mode 600"
+fi
+rm -f "$JH/.claude/CLAUDE.md"
+jev_install "$JH" --no-jev >/dev/null 2>&1 || true
+JEV_STALE_OK=1
+for s in $JSEATS; do [ ! -e "$JROOM/$s/CLAUDE.md" ] && [ ! -L "$JROOM/$s/CLAUDE.md" ] || JEV_STALE_OK=0; done
+cp "$TMP/sw-claude-md.bak" "$JH/.claude/CLAUDE.md"
+if [ "$JEV_STALE_OK" = 1 ]; then
+  ok "install.sh (Jev off) removes a generated seat CLAUDE.md once ~/.claude/CLAUDE.md is gone"
+else
+  fail "install.sh (Jev off) left a stale generated seat CLAUDE.md after ~/.claude/CLAUDE.md was removed"
+fi
+JEV_OWN_OK=1
+for mode in --no-jev --jev; do
+  rm -f "$JROOM/claude-peer/CLAUDE.md"
+  printf 'mine\n' > "$JROOM/claude-peer/CLAUDE.md"
+  JEV_ERR="$(jev_install "$JH" "$mode" 2>&1 >/dev/null || true)"
+  { [ -f "$JROOM/claude-peer/CLAUDE.md" ] && [ ! -L "$JROOM/claude-peer/CLAUDE.md" ] \
+      && [ "$(cat "$JROOM/claude-peer/CLAUDE.md")" = "mine" ] && grep -q 'WARNING.*claude-peer/CLAUDE.md' <<< "$JEV_ERR"; } || JEV_OWN_OK=0
+done
+if [ "$JEV_OWN_OK" = 1 ]; then
+  ok "install.sh leaves a user-owned seat CLAUDE.md untouched with a WARNING, with Jev off and on"
+else
+  fail "install.sh touched a user-owned seat CLAUDE.md or did not warn about it"
 fi
 
 # Safety: a forced filter failure leaves the seat CLAUDE.md alone; the user's files never change,
@@ -1140,7 +1185,7 @@ done
 for f in "$ROOM/claude-lead/output-styles/slp-lead.md" "$ROOM/lead.md" "$ROOM/room/roles/lead.md"; do
   if grep -qF "$WAIT_PATH" "$f" || grep -qF '@@SLP_WAIT@@' "$f"; then RENDER_OK=0; echo "  $f names slp-wait"; fi
 done
-cmp -s skills/supervisor/roles/lead.md "$ROOM/room/roles/lead.md" || { RENDER_OK=0; echo "  room/roles/lead.md is not a plain copy"; }
+jevf_ref off skills/supervisor/roles/lead.md | cmp -s - "$ROOM/room/roles/lead.md" || { RENDER_OK=0; echo "  room/roles/lead.md is not the Jev-off copy"; }
 [ -x "$WAIT_PATH" ] || RENDER_OK=0
 if grep -rq '@@SLP_WAIT@@' "$ROOM" --include='*.md'; then RENDER_OK=0; echo "  a rendered file still has @@SLP_WAIT@@"; fi
 if [ "$RENDER_OK" = 1 ]; then
