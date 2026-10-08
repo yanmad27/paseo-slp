@@ -22,6 +22,10 @@
 # --no-gc-launchd (skip the launchd agent), --gc-apply / --gc-kill-stale / --gc-kill-memory (--gc-kill
 # is both) / --gc-report-only (edit the opt-in keys of slp-gc.conf; the kill flags need --gc-apply).
 # SLP_LAUNCHCTL (an absolute path to an executable) overrides launchctl, for tests.
+# Jev switch: --jev / --no-jev set SLP_JEV=1|0 in ~/.config/slp-room/room.conf (default 0, off) and the
+# choice persists. Off renders the prompts, room copies, the installed skill, and the seats' CLAUDE.md
+# without Jev, and disables the ask-jev plugin and its hooks in the Claude seats only. Re-run install.sh
+# to apply a change; the flag alone changes nothing until then.
 set -euo pipefail
 
 REPO="yanmad27/paseo-slp"
@@ -33,6 +37,7 @@ DO_PASEO=1
 RELOAD=1
 ASK_TOKEN=0
 ASK_ENDPOINT=0
+JEV_FLAG=""
 GC_ONLY=0; NO_GC=0; GC_LAUNCHD=1; GC_APPLY=0; GC_KILL_STALE=0; GC_KILL_MEM=0; GC_REPORT_ONLY=0
 for arg in "$@"; do
   case "$arg" in
@@ -46,6 +51,12 @@ for arg in "$@"; do
     --gc-kill-stale) GC_KILL_STALE=1 ;;
     --gc-kill-memory) GC_KILL_MEM=1 ;;
     --gc-report-only) GC_REPORT_ONLY=1 ;;
+    --jev|--no-jev)
+      new_flag=1; [ "$arg" = "--jev" ] || new_flag=0
+      if [ -n "$JEV_FLAG" ] && [ "$JEV_FLAG" != "$new_flag" ]; then
+        echo "--jev and --no-jev are mutually exclusive; pass at most one." >&2; exit 1
+      fi
+      JEV_FLAG="$new_flag" ;;
     --no-reload) RELOAD=0 ;;
     --token) ASK_TOKEN=1 ;;
     --endpoint) ASK_ENDPOINT=1 ;;
@@ -144,6 +155,146 @@ else
   SRC="$(find "$WORK" -mindepth 1 -maxdepth 1 -type d | head -1)"
 fi
 VERSION="$(tr -d '[:space:]' < "$SRC/version.txt")"
+
+# --- room.conf: the Jev switch, decided before anything is installed -------------------------------
+# KEY=VALUE, parsed (never sourced); the last SLP_JEV wins. Only a regular file, never a link or special file.
+ROOM_CONF="$ROOM_HOME/room.conf"
+JEV=0
+if [ "$GC_ONLY" = 0 ]; then
+  if [ -L "$ROOM_CONF" ]; then
+    echo "$ROOM_CONF is a symlink; refusing to read or edit it. Replace it with a regular file and re-run." >&2; exit 1
+  elif [ -e "$ROOM_CONF" ] && [ ! -f "$ROOM_CONF" ]; then
+    echo "$ROOM_CONF exists but is not a regular file; refusing to read or edit it. Remove it and re-run." >&2; exit 1
+  fi
+  if [ -f "$ROOM_CONF" ] && grep -q '^SLP_JEV=' "$ROOM_CONF"; then
+    JEV="$(sed -n 's/^SLP_JEV=//p' "$ROOM_CONF" | tail -n 1)"
+    case "$JEV" in
+      0|1) ;;
+      *) echo "$ROOM_CONF: SLP_JEV must be 0 or 1 (got '$JEV'). Fix it, or pass --jev / --no-jev." >&2; exit 1 ;;
+    esac
+  fi
+  if [ -n "$JEV_FLAG" ] || [ ! -e "$ROOM_CONF" ]; then
+    [ -z "$JEV_FLAG" ] || JEV="$JEV_FLAG"
+    mkdir -p "$ROOM_HOME"
+    CONF_TMP="$(mktemp "$ROOM_HOME/.room.conf.XXXXXX")"
+    {
+      if [ -f "$ROOM_CONF" ]; then
+        grep -v '^SLP_JEV=' "$ROOM_CONF" || true
+      else
+        printf '%s\n' '# paseo-slp room configuration (KEY=VALUE, parsed not sourced; the last value wins).' \
+          '# SLP_JEV=1 keeps the Jev (ask-jev) parts of the prompts and seats; 0 removes them.' \
+          '# Change it with install.sh --jev / --no-jev, then re-run install.sh to apply.'
+      fi
+      printf 'SLP_JEV=%s\n' "$JEV"
+    } > "$CONF_TMP"
+    chmod 644 "$CONF_TMP"
+    mv -f "$CONF_TMP" "$ROOM_CONF"
+  fi
+fi
+if [ "$JEV" = 1 ]; then JEV_MODE=on; else JEV_MODE=off; fi
+jevf() { awk -v keep="$1" '/^<!-- jev:(on|off) -->$/{cur=($0~/jev:on/)?"on":"off";next} /^<!-- jev:end -->$/{cur="";next} cur==""||cur==keep{print}' "$2"; }
+# Rewrites a file in place (keeping its mode) with only the current mode's Jev variant.
+jevf_inplace() { local tmp="$WORK/jevf.$$"; jevf "$JEV_MODE" "$1" > "$tmp" && cat "$tmp" > "$1"; rm -f "$tmp"; }
+
+# Seat CLAUDE.md without Jev: ~/.claude/CLAUDE.md filtered by block. A block with no /jev/i is kept byte for byte;
+# a matching prose paragraph loses its matching sentences, list item/table row/heading section/fence is dropped.
+jev_filter_claude_md() {
+  LC_ALL=C awk '
+    function m(s) { return tolower(s) ~ /jev/ }
+    function isfence(s) { return s ~ /^[ \t]*(```|~~~)/ }
+    function isblank(s) { return s ~ /^[ \t]*$/ }
+    function hlevel(s,   r) {
+      if (s !~ /^#+/) return 0
+      match(s, /^#+/); r = RLENGTH
+      if (r > 6) return 0
+      if (length(s) == r || substr(s, r + 1, 1) ~ /[ \t]/) return r
+      return 0
+    }
+    function ismarker(s) { return s ~ /^[ \t]*([-*+]|[0-9]+[.)])[ \t]/ }
+    function indent(s,   t, n) { t = s; n = 0; while (t ~ /^[ \t]/) { n += (substr(t, 1, 1) == "\t") ? 4 : 1; t = substr(t, 2) } return n }
+    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+    function emit(s) { out[++o] = s; dropped = 0 }
+    function abbrev(w) { w = tolower(w); sub(/^[("\[]+/, "", w); return (w == "e.g" || w == "i.e" || w == "etc" || w == "vs" || w == "cf") }
+    function prose(k,   p, q, s, c, ch, st, ws, kept, sent, quote, res, any) {
+      quote = 1
+      for (p = 1; p <= k; p++) if (b[p] !~ /^[ \t]*>/) quote = 0
+      s = ""
+      for (p = 1; p <= k; p++) {
+        t = trim(b[p]); if (quote) t = trim(substr(t, 2))
+        s = (p == 1) ? t : s " " t
+      }
+      st = 1; ws = 0; res = ""; any = 0
+      for (c = 1; c <= length(s); c++) {
+        ch = substr(s, c, 1)
+        if (ch == " ") ws = c
+        if (ch ~ /[.!?]/ && (c == length(s) || substr(s, c + 1, 1) == " ")) {
+          if (ch == "." && abbrev(substr(s, ws + 1, c - ws - 1))) continue
+          sent = substr(s, st, c - st + 1)
+          if (!m(sent)) { res = any ? res " " sent : sent; any = 1 }
+          st = c + 1; while (substr(s, st, 1) == " ") st++
+          c = st - 1
+        }
+      }
+      if (st <= length(s)) { sent = substr(s, st); if (!m(sent)) { res = any ? res " " sent : sent; any = 1 } }
+      if (any) emit(quote ? "> " res : res)
+    }
+    function block(k,   p, q, r, any, own, ind) {
+      any = 0
+      for (p = 1; p <= k; p++) if (m(b[p])) any = 1
+      if (!any) { for (p = 1; p <= k; p++) emit(b[p]); return }
+      dropped = 1
+      if (ismarker(b[1])) {
+        p = 1
+        while (p <= k) {
+          if (!ismarker(b[p])) { emit(b[p]); p++; continue }
+          ind = indent(b[p]); own = b[p]; q = p + 1
+          while (q <= k && !ismarker(b[q])) { own = own "\n" b[q]; q++ }
+          if (m(own)) {
+            r = q
+            while (r <= k && !(ismarker(b[r]) && indent(b[r]) <= ind)) r++
+            p = r
+          } else { for (r = p; r < q; r++) emit(b[r]); p = q }
+        }
+      } else if (b[1] ~ /^[ \t]*\|/) {
+        for (p = 1; p <= k; p++) if (!m(b[p])) emit(b[p])
+      } else prose(k)
+    }
+    { L[++n] = $0 }
+    END {
+      i = 1; skiph = 0; o = 0; dropped = 1
+      while (i <= n) {
+        line = L[i]
+        if (isfence(line)) {
+          mk = substr(trim(line), 1, 3); j = i + 1
+          while (j <= n && !(isfence(L[j]) && substr(trim(L[j]), 1, 3) == mk)) j++
+          if (j > n) j = n
+          hit = 0; for (p = i; p <= j; p++) if (m(L[p])) hit = 1
+          if (skiph || hit) dropped = 1
+          else for (p = i; p <= j; p++) emit(L[p])
+          i = j + 1; continue
+        }
+        lv = hlevel(line)
+        if (lv) {
+          if (skiph && lv <= skiph) skiph = 0
+          if (skiph) dropped = 1
+          else if (m(line)) { skiph = lv; dropped = 1 }
+          else emit(line)
+          i++; continue
+        }
+        if (skiph) { dropped = 1; i++; continue }
+        if (isblank(line)) {
+          if (!(dropped && (o == 0 || isblank(out[o])))) { out[++o] = line }
+          i++; continue
+        }
+        k = 0; j = i
+        while (j <= n && !isblank(L[j]) && !isfence(L[j]) && !hlevel(L[j])) { b[++k] = L[j]; j++ }
+        block(k)
+        i = j
+      }
+      if (dropped) while (o > 0 && isblank(out[o])) o--
+      for (p = 1; p <= o; p++) print out[p]
+    }' "$1"
+}
 
 # --- auth: decided, validated and saved before anything else changes ---------------------
 # Every Claude seat shares one auth, in one of two modes, all kept in ONE private file,
@@ -511,6 +662,8 @@ if [ "$DO_SKILL" = 1 ]; then
   mkdir -p "$SKILLS"
   rm -rf "$SKILLS/supervisor"
   cp -R "$SRC/skills/supervisor" "$SKILLS/supervisor"
+  jevf_inplace "$SKILLS/supervisor/SKILL.md"
+  jevf_inplace "$SKILLS/supervisor/roles/lead.md"
   echo "Installed skill: $SKILLS/supervisor"
   # v1 installed the same role as "orchestrate"; leaving it would compete with /supervisor.
   if [ -f "$SKILLS/orchestrate/SKILL.md" ] && grep -q '^name: orchestrate$' "$SKILLS/orchestrate/SKILL.md"; then
@@ -532,8 +685,9 @@ if [ "$DO_PASEO" = 1 ]; then
   ROOM_FILES="$ROOM_HOME/room"
   mkdir -p "$ROOM_HOME/bin" "$ROOM_FILES/roles"
   # A stable copy of the room files: every seat's ROOM_DIR, however the skill was installed.
-  cp "$SRC/skills/supervisor/PROTOCOL.md" "$ROOM_FILES/PROTOCOL.md"
-  cp "$SRC/skills/supervisor/roles/lead.md" "$SRC/skills/supervisor/roles/peer.md" "$ROOM_FILES/roles/"
+  jevf "$JEV_MODE" "$SRC/skills/supervisor/PROTOCOL.md" > "$ROOM_FILES/PROTOCOL.md"
+  jevf "$JEV_MODE" "$SRC/skills/supervisor/roles/lead.md" > "$ROOM_FILES/roles/lead.md"
+  jevf "$JEV_MODE" "$SRC/skills/supervisor/roles/peer.md" > "$ROOM_FILES/roles/peer.md"
   # The room's one blocking wait, at an absolute path the Supervisor prompt names: its
   # @@SLP_WAIT@@ token is replaced with it. Only the Supervisor waits; Leads and Peers are denied.
   cp "$SRC/paseo/bin/slp-wait" "$ROOM_HOME/bin/slp-wait"
@@ -558,7 +712,7 @@ if [ "$DO_PASEO" = 1 ]; then
     printf 'this system prompt already covers it.\n\n'
     cat "$ROOM_FILES/PROTOCOL.md"
     printf '\n---\n\n'
-    awk 'n >= 2 { print; next } /^---$/ { n++ }' "$SRC/skills/supervisor/SKILL.md" \
+    jevf "$JEV_MODE" "$SRC/skills/supervisor/SKILL.md" | awk 'n >= 2 { print; next } /^---$/ { n++ }' \
       | sed "s|@@SLP_WAIT@@|$SLP_WAIT_SED|g"  # drop the frontmatter
   } > "$ROOM_HOME/supervisor.md"
 
@@ -601,12 +755,60 @@ if [ "$DO_PASEO" = 1 ]; then
       | .enabledPlugins = ((.enabledPlugins // {})
           | with_entries(if (.key | test("^(paseo-slp|orchestrate)@")) then .value = false else . end))
     ' > "$RUNTIME/settings.json"
+    if [ "$JEV" = 0 ]; then
+      # Jev off, seats only: ask-jev disabled and its hooks removed; the user's own settings.json is only read.
+      jq '
+        .enabledPlugins = ((.enabledPlugins // {}) | .["ask-jev@ask-jev"] = false)
+      ' "$RUNTIME/settings.json" > "$RUNTIME/settings.json.tmp"
+      jq '
+        if (.hooks | type) == "object" then
+          .hooks |= (
+            with_entries(
+              .value |= (if type == "array" then
+                map(if type == "object" and (.hooks | type) == "array" then
+                      .hooks |= map(select(((type == "object") and (.command | type) == "string" and (.command | test("ask-jev\\.mjs|jev-ask\\.mjs"))) | not))
+                    else . end)
+                | map(select((type == "object" and (.hooks | type) == "array" and (.hooks | length) == 0) | not))
+              else . end))
+            | with_entries(select((.value | type) != "array" or (.value | length) > 0)))
+        else . end
+      ' "$RUNTIME/settings.json.tmp" > "$RUNTIME/settings.json"
+      rm -f "$RUNTIME/settings.json.tmp"
+    fi
 
-    for shared in plugins agents commands CLAUDE.md; do
+    for shared in plugins agents commands; do
       if [ -e "$CLAUDE_HOME/$shared" ] && { [ -L "$RUNTIME/$shared" ] || [ ! -e "$RUNTIME/$shared" ]; }; then
         ln -sfn "$CLAUDE_HOME/$shared" "$RUNTIME/$shared"
       fi
     done
+    # Seat CLAUDE.md: the link to the user's file with Jev on; with Jev off a regular, filtered copy that
+    # starts with GEN_HEADER. Never written through the link, and a file of the user's own is left alone.
+    GEN_HEADER="<!-- generated by paseo-slp install.sh from ~/.claude/CLAUDE.md (room switch off); re-run install.sh after editing it -->"
+    SEAT_MD="$RUNTIME/CLAUDE.md"
+    if [ -e "$CLAUDE_HOME/CLAUDE.md" ]; then
+      GENERATED=0
+      if [ -f "$SEAT_MD" ] && [ ! -L "$SEAT_MD" ] && [ "$(head -n 1 "$SEAT_MD")" = "$GEN_HEADER" ]; then GENERATED=1; fi
+      if [ "$JEV" = 1 ]; then
+        if [ "$GENERATED" = 1 ]; then rm -f "$SEAT_MD"; fi
+        if [ -L "$SEAT_MD" ] || [ ! -e "$SEAT_MD" ]; then
+          ln -sfn "$CLAUDE_HOME/CLAUDE.md" "$SEAT_MD"
+        else
+          echo "WARNING: $SEAT_MD is not a link and was not generated by install.sh; left alone." >&2
+        fi
+      elif [ -L "$SEAT_MD" ] || [ ! -e "$SEAT_MD" ] || [ "$GENERATED" = 1 ]; then
+        MD_TMP="$(mktemp "$RUNTIME/.CLAUDE.md.XXXXXX")"
+        if ! { printf '%s\n' "$GEN_HEADER"; jev_filter_claude_md "$CLAUDE_HOME/CLAUDE.md"; } > "$MD_TMP" \
+          || { [ -s "$CLAUDE_HOME/CLAUDE.md" ] && [ "$(wc -l < "$MD_TMP")" -le 1 ]; }; then
+          rm -f "$MD_TMP"
+          echo "ERROR: could not filter $CLAUDE_HOME/CLAUDE.md for the $role seat (Jev off); $SEAT_MD left as it was. Fix the cause or pass --jev." >&2
+          exit 1
+        fi
+        chmod 644 "$MD_TMP"
+        mv -f "$MD_TMP" "$SEAT_MD"
+      else
+        echo "WARNING: $SEAT_MD is not a link and was not generated by install.sh; left alone." >&2
+      fi
+    fi
     find "$RUNTIME/skills" -mindepth 1 -maxdepth 1 -type l -exec rm -f {} +
     if [ -d "$CLAUDE_HOME/skills" ]; then
       for skill in "$CLAUDE_HOME/skills"/*; do
