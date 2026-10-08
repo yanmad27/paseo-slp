@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.7.0](https://github.com/yanmad27/paseo-slp/compare/v2.6.0...v2.7.0) (2026-10-08)
+
+
+### Features
+
+* Cheap peer runs on Claude Haiku 5.5 (claude-haiku-5-5) ([#56](https://github.com/yanmad27/paseo-slp/issues/56)) ([2f3a517](https://github.com/yanmad27/paseo-slp/commit/2f3a517fdc92a71fe46404b5a23ca109be3bd73f))
+
 ## [2.6.0](https://github.com/yanmad27/paseo-slp/compare/v2.5.0...v2.6.0) (2026-10-08)
 
 
