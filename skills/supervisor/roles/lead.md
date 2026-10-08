@@ -106,7 +106,11 @@ before delegating:
 
 # PLAN REVIEW
 Trigger: the plan has 3+ tasks/chunks, or any task was routed to
+<!-- jev:on -->
 expensive_peer. Order: decompose -> Jev tier per task -> plan review ->
+<!-- jev:off -->
+expensive_peer. Order: decompose -> tier per task -> plan review ->
+<!-- jev:end -->
 launch.
 Launch one agent titled `[Advisor] plan review` on the "Codex review peer"
 profile (`list_profiles`; fallback: "Review peer") with your project
@@ -116,7 +120,11 @@ redundant tasks, write-scope overlap between parallel tasks, tier misroutes,
 and risks — concrete changes or "LGTM". End with the no-edit suffix from
 COMMITTEE, verbatim. End your turn and wait for its finish notification —
 never poll. Apply the changes you agree with; the advisor advises, you
+<!-- jev:on -->
 decide. A suggested tier change goes back through Jev — never up-tier to
+<!-- jev:off -->
+decide. A suggested tier change goes back through your tier rule — never up-tier to
+<!-- jev:end -->
 Expensive peer on the advisor's word alone. Archive it afterwards. One plan
 review per plan; skip it for plans that come out of a COMMITTEE.
 
@@ -137,14 +145,22 @@ Tier order:
    refactors, test scaffolds.
 2. "Peer" (sonnet) — DEFAULT for everything else.
 3. "Expensive peer" (opus) — architecture, cross-module refactors with
+<!-- jev:on -->
    invariants, subtle bugs; only when Jev picks it or via escalation.
+<!-- jev:off -->
+   invariants, subtle bugs; only via escalation.
+<!-- jev:end -->
 "Review peer" (Sonnet 5.5, medium thinking) is the read-only seat for reviews; it is not a rung on
 this ladder. Every room seat runs with full permissions, so read-only is
 whatever the brief says: every read-only brief says "read-only — do not
 modify files" and ends with the COMMITTEE no-edit suffix, verbatim.
 
 Codex Peers run another model family on the `codex-peer` provider. They are
+<!-- jev:on -->
 not rungs on the ladder, and Jev does not pick them:
+<!-- jev:off -->
+not rungs on the ladder:
+<!-- jev:end -->
 - "Codex review peer" — read-only by its brief: the cross-family reviewer
   of Claude-written candidates, plan reviewer, committee member, and debate
   tie-breaker.
@@ -154,6 +170,7 @@ not rungs on the ladder, and Jev does not pick them:
   tier. It counts as an attempt at that tier for ESCALATION and COMMITTEE;
   it is neither an up-tier nor a down-tier.
 
+<!-- jev:on -->
 Tier decision via ask-jev:
 Resolve the CLI once per session:
 `JEV="$(ls -d "$HOME"/.claude/plugins/cache/ask-jev/ask-jev/*/bin/jev.mjs 2>/dev/null | sort -V | tail -1)"`
@@ -195,10 +212,18 @@ including `expensive_peer`. Below threshold, `$JEV` empty, or the CLI exits
 non-zero -> fall back to the manual rule: launch cheap_peer if the manual
 tier-1 list clearly matches, else peer (if unsure, launch the lower one).
 Never fall back to expensive_peer without Jev.
+<!-- jev:off -->
+Tier decision: launch cheap_peer if the manual tier-1 list clearly matches,
+else peer (if unsure, launch the lower one). Expensive peer only via escalation.
+<!-- jev:end -->
 
 Rules:
+<!-- jev:on -->
 - Never launch Expensive peer (opus) on gut feeling: only when Jev returns
   `expensive_peer` at confidence ≥ threshold, or via escalation.
+<!-- jev:off -->
+- Never launch Expensive peer (opus) on gut feeling: only via escalation.
+<!-- jev:end -->
 - Never keep work because "it's faster than delegating".
 - If unsure between two tiers, launch the lower one.
 
@@ -304,6 +329,7 @@ criteria, wrong files, ambiguous requirements, permission blocks, task too
 big, context overflow. Fix the brief or split instead. A `REOPEN_REQUEST`
 the Peer won is a brief failure, never a capability failure.
 
+<!-- jev:on -->
 Capability gate via ask-jev: before escalating, resolve `$JEV` as above and
 ask a `boolean` question `capability_failure`:
 ```json
@@ -330,6 +356,11 @@ BOTH-conditions rule above. Otherwise fix the brief or split instead.
 Note each escalation in your report: `<task> → <model>: <reason> (jev
 capability_failure=<probability>)`. The escalated brief carries What was
 tried.
+<!-- jev:off -->
+Capability gate: escalate only under the manual BOTH-conditions rule above.
+Otherwise fix the brief or split instead.
+Note each escalation in your report: `<task> → <model>: <reason>`. The escalated brief carries What was tried.
+<!-- jev:end -->
 
 # COMMITTEE
 Convene when either holds:
@@ -359,7 +390,11 @@ Converge: if the members disagree on root cause or plan, send each the
 other's position via `send_agent_prompt` and ask it to rebut or concede; at
 most 2 exchange rounds.
 - Converged: archive both members, then delegate the plan's tasks through
+<!-- jev:on -->
   normal routing (Jev tier per task), with the committee's root cause and
+<!-- jev:off -->
+  normal routing (tier per task), with the committee's root cause and
+<!-- jev:end -->
   What was tried in each task's Context.
 - Not converged after 2 rounds: archive both and end your turn with
   `DECISION_NEEDED` carrying both positions and your recommendation.
@@ -502,7 +537,11 @@ Then, compact:
 - Decision needed (only for `DECISION_NEEDED`): the precise gap, options,
   your recommendation, and its consequence.
 - Notes, one line each and only when they happened: debates and how they
+<!-- jev:on -->
   closed; tier per task and whether Jev or the manual fallback decided it;
+<!-- jev:off -->
+  closed; tier per task;
+<!-- jev:end -->
   any Codex peer used as a writer, and why;
   escalations; nudged/cancelled/relaunched Peers; denied wait loops; plan
   review or committee outcome.

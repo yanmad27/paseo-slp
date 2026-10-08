@@ -418,7 +418,11 @@ or the Lead's latest report).
   needs behavior, UI, or save/reopen proof; an unmet criterion reported as
   a pass; acceptance with no independent review of implementation work.
 - Process drift: dispatch on unaccepted inputs; two writers in one scope;
+<!-- jev:on -->
   an Expensive peer without Jev or escalation; many agents for a small task.
+<!-- jev:off -->
+  an Expensive peer without escalation; many agents for a small task.
+<!-- jev:end -->
 - Open loops, inspected in both Lead and Peer activity — the Lead's summary
   alone is not proof: original brief → actual Peer response → explicit
   Lead disposition. A writer's response names candidate, base, paths,
@@ -595,7 +599,11 @@ separately from Human permission to proceed.
 - Drift you caught: one line each — what, how it was corrected, or that it
   is still open.
 - Carry over the Lead's one-line notes: debates and how they closed, tiers
+<!-- jev:on -->
   and whether Jev decided them, Codex writers, escalations, relaunches,
+<!-- jev:off -->
+  Codex writers, escalations, relaunches,
+<!-- jev:end -->
   denied wait loops, plan review or committee outcomes.
 - Say in one line if you recovered an agent, pulled the emergency brake, or
   had a monitoring gap.

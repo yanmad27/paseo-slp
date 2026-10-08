@@ -49,7 +49,7 @@
         "model": "claude-opus-5-5",
         "modeId": "bypassPermissions",
         "thinkingOptionId": "low",
-        "notes": "Launched by a Lead. Hard problems only: architecture decisions, cross-module refactors with invariants, subtle concurrency/data bugs, tasks where a Peer retry already failed. Chosen by Jev routing or escalation, never as a default."
+        "notes": "Launched by a Lead. Hard problems only: architecture decisions, cross-module refactors with invariants, subtle concurrency/data bugs, tasks where a Peer retry already failed. Chosen by the Lead's tier routing or escalation, never as a default."
       },
       {
         "id": "agent_profile_slp_review_peer",
