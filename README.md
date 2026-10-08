@@ -324,6 +324,10 @@ With Jev off:
 - Each Claude seat gets a filtered copy of `~/.claude/CLAUDE.md` with the
   sentences, list items, table rows, sections and code fences that mention
   Jev removed (with Jev on it is a symlink to your file).
+- Seats run under your home directory, and Claude Code also loads `CLAUDE.md`
+  files from the working directory's ancestors. So each seat's `settings.json`
+  adds `~/.claude/CLAUDE.md` to `claudeMdExcludes`, and the seat sees only its
+  filtered copy. Your own `claudeMdExcludes` entries are kept.
 
 The generated copy has mode 600, and a stale one is removed when
 `~/.claude/CLAUDE.md` no longer exists. A seat `CLAUDE.md` you wrote yourself
@@ -332,8 +336,8 @@ The generated copy has mode 600, and a stale one is removed when
 Your `~/.claude` is never written. Re-run `install.sh` after editing
 `~/.claude/CLAUDE.md` or changing the switch.
 
-Limits: only `~/.claude/CLAUDE.md` is filtered — project `CLAUDE.md` files and
-`@imports` are not. A `CLAUDE.md` made entirely of Jev content makes the off
+Limits: only `~/.claude/CLAUDE.md` is filtered — project `CLAUDE.md` files outside
+`~/.claude` and `@imports` are not. A `CLAUDE.md` made entirely of Jev content makes the off
 install fail with an error. The seat `settings.json` keeps the
 `"ask-jev@ask-jev": false` key, because that is how the plugin is disabled,
 and any of your own `permissions.deny` / `permissions.ask` entries that

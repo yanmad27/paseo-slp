@@ -489,7 +489,7 @@ mk_jev_home() {
   rm -rf "$h"
   mkdir -p "$h/bin" "$h/.claude/skills/supervisor" "$h/.claude/skills/other" "$h/.config/slp-room" "$h/.codex"
   cat > "$h/.claude/settings.json" <<'JSON'
-{"theme": "dark", "enabledPlugins": {"ask-jev@ask-jev": true, "x@y": true},
+{"theme": "dark", "claudeMdExcludes": ["/u/keep.md"], "enabledPlugins": {"ask-jev@ask-jev": true, "x@y": true},
  "env": {"ASK_JEV_GATES": "1", "KEEP_ME": "1"},
  "extraKnownMarketplaces": {"ask-jev": {"source": {"source": "github", "repo": "o/ask-jev"}}, "other": {"source": {"source": "github", "repo": "o/other"}}},
  "permissions": {"allow": ["Bash(node /p/ask-jev/bin/jev.mjs:*)", "Bash(ls:*)"], "deny": ["Bash(jev-deny:*)", "Bash(rm:*)"], "ask": ["Bash(jev-ask:*)"]},
@@ -581,10 +581,11 @@ if jev_install "$JH" >/dev/null 2>&1; then
         and ([.hooks.Stop[].hooks[].command? | select(. != null and contains("paseo hooks claude Stop"))] | length) == 1
         and ([.hooks.Stop[].hooks[] | select(has("command") | not)] | length) == 1
         and (.hooks | has("Only") | not)' "$JROOM/$s/settings.json" >/dev/null || JEV_SET_OK=0
-    jq -e '(.env | has("ASK_JEV_GATES") | not) and .env.KEEP_ME == "1"
+    jq -e --arg md "$JH/.claude/CLAUDE.md" '(.env | has("ASK_JEV_GATES") | not) and .env.KEEP_ME == "1"
         and (.extraKnownMarketplaces | has("ask-jev") | not) and (.extraKnownMarketplaces | has("other"))
         and .permissions.allow == ["Bash(ls:*)"]
-        and .permissions.deny == ["Bash(jev-deny:*)", "Bash(rm:*)"] and .permissions.ask == ["Bash(jev-ask:*)"]' \
+        and .permissions.deny == ["Bash(jev-deny:*)", "Bash(rm:*)"] and .permissions.ask == ["Bash(jev-ask:*)"]
+        and ([.claudeMdExcludes[] | select(. == $md)] | length) == 1 and (.claudeMdExcludes | index("/u/keep.md") != null)' \
       "$JROOM/$s/settings.json" >/dev/null || JEV_SET_OK=0
     # the only jev text left: the ask-jev@ask-jev key and the user's own deny/ask entries (kept, never loosened)
     [ "$(jq -c 'del(.enabledPlugins["ask-jev@ask-jev"], .permissions.deny, .permissions.ask)' "$JROOM/$s/settings.json" | grep -ci jev || true)" = 0 ] || JEV_SET_OK=0
@@ -640,7 +641,7 @@ if jev_install "$JH" --jev >/dev/null 2>&1; then
     jq -e '.enabledPlugins["ask-jev@ask-jev"] == true and .enabledPlugins["x@y"] == true
         and ([.. | strings | select(test("ask-jev\\.mjs"))] | length) >= 1
         and .env.ASK_JEV_GATES == "1" and (.extraKnownMarketplaces | has("ask-jev"))
-        and (.permissions.allow | length) == 2' "$JROOM/$s/settings.json" >/dev/null || JEV_ON_OK=0
+        and (.permissions.allow | length) == 2 and .claudeMdExcludes == ["/u/keep.md"]' "$JROOM/$s/settings.json" >/dev/null || JEV_ON_OK=0
     [ "$(readlink "$JROOM/$s/CLAUDE.md")" = "$JH/.claude/CLAUDE.md" ] || JEV_ON_OK=0
   done
   # byte-identity of the room copy of lead.md against the sources filtered for on
