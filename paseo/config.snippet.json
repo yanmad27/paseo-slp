@@ -26,7 +26,7 @@
         "name": "Cheap peer",
         "icon": "hammer",
         "provider": "claude-peer",
-        "model": "claude-haiku-4-5",
+        "model": "claude-haiku-5-5",
         "modeId": "bypassPermissions",
         "thinkingOptionId": "low",
         "notes": "Launched by a Lead. Extraction, classification, formatting, log triage, renames, doc/comment updates, mechanical refactors, test scaffolding."
