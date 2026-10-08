@@ -29,7 +29,7 @@
         "model": "claude-haiku-5-5",
         "modeId": "bypassPermissions",
         "thinkingOptionId": "low",
-        "notes": "Launched by a Lead. Extraction, classification, formatting, log triage, renames, doc/comment updates, mechanical refactors, test scaffolding."
+        "notes": "Launched by a Lead. Extraction, classification, summaries of supplied text, formatting, log triage, renames, doc/comment updates, mechanical refactors, test scaffolding."
       },
       {
         "id": "agent_profile_slp_peer",
@@ -39,7 +39,7 @@
         "model": "claude-sonnet-5-5",
         "modeId": "bypassPermissions",
         "thinkingOptionId": "low",
-        "notes": "Launched by a Lead. DEFAULT for implementation, debugging, multi-file refactors, research, writing."
+        "notes": "Launched by a Lead. DEFAULT for implementation, debugging, multi-file refactors, research with judgement, writing."
       },
       {
         "id": "agent_profile_slp_expensive_peer",
