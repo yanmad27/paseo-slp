@@ -110,7 +110,7 @@ Enable Paseo MCP tool injection in `~/.paseo/config.json`:
    ```
 
    When it asks for the token, copy the `sk-ant-oat01-…` line from step 1 and
-   paste it (input is hidden). It is saved to `~/.config/slp-room/oauth-token`
+   paste it (input is hidden). It is saved to `~/.config/slp-room/auth`
    (mode 600) and reused on every later run.
 
 3. Open an agent on the **Supervisor** profile in Paseo and describe the goal — no `/supervisor` needed.
@@ -158,7 +158,7 @@ it uses the checkout.
 | `SLP_REF=<branch or tag>` | Install that version instead of `main` (piped runs) |
 | `SLP_ROOM_HOME=<dir>` | Build the runtimes somewhere other than `~/.config/slp-room` |
 | `--token` | Ask for a new Claude token and replace the saved one (e.g. to rotate it) |
-| `SLP_CLAUDE_OAUTH_TOKEN=<token>` | Use this token instead of `~/.config/slp-room/oauth-token` (no prompt) |
+| `SLP_CLAUDE_OAUTH_TOKEN=<token>` | Use this token instead of the one saved in `~/.config/slp-room/auth` (no prompt) |
 | `--endpoint` | Ask for a custom Anthropic-compatible base URL and key (and how to send it) instead of a token |
 | `SLP_CLAUDE_BASE_URL=<url>` `SLP_CLAUDE_AUTH_TOKEN=<key>` | Use this endpoint and key, saved for later runs (no prompt; the key is never taken as an argument). `SLP_CLAUDE_API_KEY` is still accepted as an older alias for `SLP_CLAUDE_AUTH_TOKEN`; if both are set and differ, the install stops before changing anything |
 | `SLP_CLAUDE_AUTH_HEADER=bearer\|x-api-key` | How the key is sent; default `bearer` |
@@ -174,19 +174,19 @@ it uses the checkout.
 `install.sh` writes eight agent profiles and three providers into
 `~/.paseo/config.json`. Every Lead and Peer seat runs with full permissions
 (Claude `bypassPermissions`, Codex `full-access`); reviewers are read-only
-because their brief says so. Thinking: Supervisor extra high, Lead high,
-review peers high, every other Peer medium.
+because their brief says so. Thinking: Supervisor high, Lead medium,
+review peers medium, every other Peer low.
 
 | Profile | Provider | Model | Mode | Use for |
 |---|---|---|---|---|
-| **Supervisor** | `claude-supervisor` | `claude-opus-5-5` (thinking: xhigh) | `bypassPermissions` | The seat you talk to; the Supervisor role is its system prompt. Extra-high thinking for judging drift; every inspection (each `slp-wait` timeout or heartbeat wake, about every 2 minutes) is a turn at that level. |
-| **Lead** | `claude-lead` | `claude-opus-5-5` (thinking: high) | `bypassPermissions` | Launched by the Supervisor: owns one project's technical outcome, dispatches Peers, accepts or rejects candidates |
-| **Cheap peer** | `claude-peer` | `claude-haiku-4-5` (thinking: medium) | `bypassPermissions` | Extraction, formatting, log triage, mechanical refactors — the down-tier target |
-| **Peer** | `claude-peer` | `claude-sonnet-5-5` (thinking: medium) | `bypassPermissions` | Default tier for implementation, debugging, and research |
-| **Expensive peer** | `claude-peer` | `claude-opus-5-5` (thinking: medium) | `bypassPermissions` | Hard problems only: architecture decisions, cross-module refactors with invariants, subtle concurrency/data bugs — chosen by Jev routing or escalation, never by default |
-| **Review peer** | `claude-peer` | `claude-sonnet-5-5` (thinking: high) | `bypassPermissions` | Read-only Peer: reviews Codex-written candidates (and security-sensitive ones with `security-review`), architecture questions, committee member |
-| **Codex peer** | `codex-peer` | `gpt-6.1-sol` (thinking: medium) | `full-access` | Writable Peer from another model family — only when you ask for Codex, or to retry a task a Claude Peer already failed. Not a tier. |
-| **Codex review peer** | `codex-peer` | `gpt-6.1-sol` (thinking: high) | `full-access` | Read-only cross-family reviewer of Claude-written candidates, plan reviewer, committee member, debate tie-breaker |
+| **Supervisor** | `claude-supervisor` | `claude-opus-5-5` (thinking: high) | `bypassPermissions` | The seat you talk to; the Supervisor role is its system prompt. High thinking for judging drift; every inspection (each `slp-wait` timeout or heartbeat wake, about every 2 minutes) is a turn at that level. |
+| **Lead** | `claude-lead` | `claude-opus-5-5` (thinking: medium) | `bypassPermissions` | Launched by the Supervisor: owns one project's technical outcome, dispatches Peers, accepts or rejects candidates |
+| **Cheap peer** | `claude-peer` | `claude-haiku-4-5` (thinking: low) | `bypassPermissions` | Extraction, formatting, log triage, mechanical refactors — the down-tier target |
+| **Peer** | `claude-peer` | `claude-sonnet-5-5` (thinking: low) | `bypassPermissions` | Default tier for implementation, debugging, and research |
+| **Expensive peer** | `claude-peer` | `claude-opus-5-5` (thinking: low) | `bypassPermissions` | Hard problems only: architecture decisions, cross-module refactors with invariants, subtle concurrency/data bugs — chosen by Jev routing or escalation, never by default |
+| **Review peer** | `claude-peer` | `claude-sonnet-5-5` (thinking: medium) | `bypassPermissions` | Read-only Peer: reviews Codex-written candidates (and security-sensitive ones with `security-review`), architecture questions, committee member |
+| **Codex peer** | `codex-peer` | `gpt-6.1-sol` (thinking: low) | `full-access` | Writable Peer from another model family — only when you ask for Codex, or to retry a task a Claude Peer already failed. Not a tier. |
+| **Codex review peer** | `codex-peer` | `gpt-6.1-sol` (thinking: medium) | `full-access` | Read-only cross-family reviewer of Claude-written candidates, plan reviewer, committee member, debate tie-breaker |
 
 | Provider | Extends | Agent tools |
 |---|---|---|
@@ -226,7 +226,7 @@ way codex-room-setup does it with one `CODEX_HOME` per role:
   `~/.config/slp-room/room`.
 - **Auth** is shared through one `claude setup-token` token. `install.sh`
   asks for it on the terminal when it has none (or with `--token`), keeps it
-  in `~/.config/slp-room/oauth-token` (mode 600), puts it into every Claude
+  in `~/.config/slp-room/auth` (mode 600), puts it into every Claude
   seat's provider as `CLAUDE_CODE_OAUTH_TOKEN`, and keeps
   `~/.paseo/config.json` and its backups at mode `600`. Without a token it
   leaves the variable out; then log in once per runtime instead:
@@ -277,8 +277,11 @@ or `https://` URL without whitespace (a trailing `/` is dropped; credentials in
 it are kept but never printed). The key is opaque: surrounding whitespace,
 including a trailing newline, is trimmed; the key may not be empty or contain
 a line break inside it. Both
-are saved in `~/.config/slp-room/anthropic-base-url` / `anthropic-api-key` /
-`anthropic-auth-header` (mode 600), the mode in `auth-mode`. In this mode the
+are saved, with the mode, in the one file `~/.config/slp-room/auth` (mode 600).
+Older installs kept them in five files (`auth-mode`, `oauth-token`,
+`anthropic-*`); the next `install.sh` run moves them into `auth` and deletes
+them, and leaves any old file whose value differs from `auth` in place, with a
+warning. In this mode the
 `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_*` keys in your `~/.claude/settings.json`
 `env` are left out of the runtimes' copies (with a warning naming the keys).
 
@@ -293,8 +296,9 @@ Which mode applies:
   saved endpoint (an error if none is complete).
 - A token request that yields no token (Enter, a bad paste, nothing saved)
   keeps the saved endpoint when the saved mode is `endpoint`, and says so.
-- `auth-mode` becomes `token` only when a token is saved in `oauth-token`
-  (pasted, or `--token` with one already there). `SLP_CLAUDE_OAUTH_TOKEN` is
+- `mode=token` is saved in `auth` only when a token is saved there
+  (pasted, or `--token` with one already there). An old `auth-mode` file is carried
+  over as is when it migrates, so `mode=token` can arrive without a token, as before. `SLP_CLAUDE_OAUTH_TOKEN` is
   used for that run only, as before, and changes nothing saved.
 - The header form, in order: `SLP_CLAUDE_AUTH_HEADER` if set (which also skips
   the header prompt, like `SLP_CLAUDE_BASE_URL` and `SLP_CLAUDE_AUTH_TOKEN` skip
@@ -308,7 +312,7 @@ Which mode applies:
 Each run resets the room's profiles (matched by `id`, or by name for
 profiles an old installer left without one), the `claude-lead`/`claude-peer`/
 `codex-peer` providers, `~/.claude/skills/supervisor`, and the generated
-files in `~/.config/slp-room` to this version (your `oauth-token`, saved endpoint files, and each
+files in `~/.config/slp-room` to this version (your saved `auth` file and each
 runtime's session history stay); removes the v1 profiles and the v1
 `claude-worker` provider; and leaves every other profile and provider alone.
 A model you change in the Paseo UI on a room profile is overwritten on the
