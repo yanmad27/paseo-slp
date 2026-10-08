@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.6.0](https://github.com/yanmad27/paseo-slp/compare/v2.5.0...v2.6.0) (2026-10-08)
+
+
+### Features
+
+* a watch Peer holds the wait on external jobs (CI, deploy) so a room agent runs while CI runs ([#53](https://github.com/yanmad27/paseo-slp/issues/53)) ([868fa46](https://github.com/yanmad27/paseo-slp/commit/868fa46ff0c42c31755fec3f484b3c9227656979))
+* every room profile runs one thinking level lower, and Codex peers run on gpt-6.1-sol ([#55](https://github.com/yanmad27/paseo-slp/issues/55)) ([c2fcc31](https://github.com/yanmad27/paseo-slp/commit/c2fcc316ea81e15329e657a5e31965bf6487a43b))
+* keep the shared Claude seat auth in one private file, $ROOM_HOME/auth ([#52](https://github.com/yanmad27/paseo-slp/issues/52)) ([78bbc19](https://github.com/yanmad27/paseo-slp/commit/78bbc19cd2eedab9e6df9bd743317ea5ba1b257d))
+* run Codex peers on gpt-6.1-sol ([#51](https://github.com/yanmad27/paseo-slp/issues/51)) ([876b1a4](https://github.com/yanmad27/paseo-slp/commit/876b1a42fda608efc5907dd876b5053418a5b520))
+
 ## [2.5.0](https://github.com/yanmad27/paseo-slp/compare/v2.4.0...v2.5.0) (2026-10-06)
 
 
