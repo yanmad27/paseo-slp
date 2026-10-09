@@ -1510,6 +1510,21 @@ chmod a-w "$RVH/.config/slp-room/claude-reviewer"
 if HOME="$RVH" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1; then :; fi
 chmod u+w "$RVH/.config/slp-room/claude-reviewer"
 rv_restricted || { RV_OK=0; echo "  an aborted re-install left raw (unrestricted) reviewer settings"; }
+# A render failure (invalid-type permissions.deny) keeps the previous restricted file byte-identical and leaves no staging file.
+RVS="$RVH/.config/slp-room/claude-reviewer"; RV_SUM="$(sha256_of "$RVS/settings.json")"
+printf '{"permissions":{"deny":"invalid-type"}}\n' > "$RVH/.claude/settings.json"
+if HOME="$RVH" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1; then RV_OK=0; echo "  an invalid-type reviewer render did not abort"; fi
+[ "$(sha256_of "$RVS/settings.json")" = "$RV_SUM" ] || { RV_OK=0; echo "  a failed render changed the previous restricted reviewer settings"; }
+[ -z "$(find "$RVS" -maxdepth 1 -name 'settings.json.*')" ] || { RV_OK=0; echo "  a failed render left staging files"; }
+# First install failing: a deny-all stub (mode 600), never an absent or raw file.
+RVF="$TMP/home-rv-first"; rm -rf "$RVF"; mkdir -p "$RVF/.claude"
+cp "$RVH/.claude/settings.json" "$RVF/.claude/settings.json"
+if HOME="$RVF" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1; then RV_OK=0; echo "  a first install with invalid reviewer input did not abort"; fi
+RVFS="$RVF/.config/slp-room/claude-reviewer/settings.json"
+{ [ -f "$RVFS" ] && [ "$(stat -c %a "$RVFS" 2>/dev/null || stat -f %Lp "$RVFS")" = "600" ] \
+  && jq -e '.sandbox.enabled == true and .sandbox.allowUnsandboxedCommands == false and .sandbox.failIfUnavailable == true
+      and (.permissions.deny | index("Bash") != null and index("Edit") != null and index("Write") != null and index("WebFetch") != null and index("WebSearch") != null)' "$RVFS" >/dev/null; } \
+  || { RV_OK=0; echo "  a first-install render failure did not leave a deny-all stub at mode 600"; }
 grep -q 'Room role: Peer' "$RV/claude-reviewer/output-styles/slp-reviewer.md" || { RV_OK=0; echo "  reviewer output style lacks the Peer role"; }
 jq -e '.agents.providers as $p
     | $p["claude-reviewer"].env.CLAUDE_CONFIG_DIR == $room + "/claude-reviewer"

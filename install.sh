@@ -143,7 +143,23 @@ fi
 
 WORK="$(mktemp -d)"
 AUTH_TMP=""
-trap 'rm -rf "$WORK"; [ -z "$AUTH_TMP" ] || rm -f "$AUTH_TMP"' EXIT
+# While a reviewer runtime is being rendered (RV_RT set), any exit removes the staging files and, unless a
+# restricted settings.json already exists, installs a deny-all stub: a failed render never leaves the seat
+# without a policy and never deletes the previous restricted file.
+RV_RT=""
+reviewer_failsafe() {
+  [ -n "$RV_RT" ] || return 0
+  rm -f "$RV_RT/settings.json.new" "$RV_RT/settings.json.new.tmp" "$RV_RT/settings.json.tmp" 2>/dev/null || true
+  if ! jq -e '.sandbox.enabled == true and .sandbox.allowUnsandboxedCommands == false' "$RV_RT/settings.json" >/dev/null 2>&1; then
+    ( umask 077
+      printf '%s\n' '{"outputStyle":"slp-reviewer","permissions":{"defaultMode":"default","disableBypassPermissionsMode":"disable","deny":["Edit","Write","NotebookEdit","MultiEdit","Bash","WebFetch","WebSearch"]},"sandbox":{"enabled":true,"allowUnsandboxedCommands":false,"failIfUnavailable":true,"autoAllowBashIfSandboxed":false,"network":{"allowedDomains":[]},"filesystem":{"denyWrite":["/"]}}}' > "$RV_RT/settings.json.stub" \
+        && mv -f "$RV_RT/settings.json.stub" "$RV_RT/settings.json" ) 2>/dev/null || true
+    rm -f "$RV_RT/settings.json.stub" 2>/dev/null || true
+    echo "WARNING: the reviewer settings could not be rendered; $RV_RT/settings.json is a deny-all stub (or the previous restricted file) until a successful install." >&2
+  fi
+  RV_RT=""
+}
+trap 'rm -rf "$WORK"; [ -z "$AUTH_TMP" ] || rm -f "$AUTH_TMP"; reviewer_failsafe' EXIT
 
 # Source: this checkout, or the repository tarball when piped.
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ] \
@@ -753,7 +769,8 @@ if [ "$DO_PASEO" = 1 ]; then
     RUNTIME="$ROOM_HOME/claude-$role"
     # The reviewer's settings are rendered to a side file and moved into place only after the restricted
     # merge succeeds: an aborted install can never leave the raw user settings under the seat.
-    SETTINGS_OUT="$RUNTIME/settings.json"; [ "$role" != reviewer ] || SETTINGS_OUT="$RUNTIME/settings.json.new"
+    SETTINGS_OUT="$RUNTIME/settings.json"
+    if [ "$role" = reviewer ]; then SETTINGS_OUT="$RUNTIME/settings.json.new"; RV_RT="$RUNTIME"; RV_UMASK="$(umask)"; umask 077; fi
     PROMPT_ROLE="$role"; [ "$role" != reviewer ] || PROMPT_ROLE=peer  # the reviewer seat runs the Peer prompt
     mkdir -p "$RUNTIME/output-styles" "$RUNTIME/skills"
     {
@@ -858,7 +875,8 @@ if [ "$DO_PASEO" = 1 ]; then
         && chmod 600 "$RUNTIME/settings.json.tmp" \
         && mv "$RUNTIME/settings.json.tmp" "$RUNTIME/settings.json" \
         && rm -f "$SETTINGS_OUT" \
-        || { rm -f "$RUNTIME/settings.json.tmp" "$RUNTIME/settings.json" "$SETTINGS_OUT"; echo "ERROR: could not render the reviewer sandbox settings; the reviewer would run unrestricted. Aborting." >&2; exit 1; }
+        || { echo "ERROR: could not render the reviewer sandbox settings; the previous restricted file is kept (or a deny-all stub written). Aborting." >&2; exit 1; }
+      RV_RT=""; umask "$RV_UMASK"
     fi
 
     for shared in plugins agents commands; do
