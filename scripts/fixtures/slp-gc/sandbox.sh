@@ -44,7 +44,7 @@ fx_sched() {  # dir id status target updatedAgo lastRunAgo|- room(0/1) runs
   for i in $(seq 1 "$runs"); do r="$r{\"id\":\"r$i\",\"scheduledFor\":\"$(fx_iso $((i * 120)))\",\"startedAt\":\"$(fx_iso $((i * 120)))\",\"status\":\"failed\",\"error\":\"already has an active run\"},"; done
   r="[${r%,}]"
   cat > "$dir/$id.json" <<J
-{"id":"$id","name":$nm,"prompt":"[supervisor-heartbeat] hello","cadence":{"type":"cron","expression":"*/2 * * * *"},
+{"id":"$id","name":$nm,"prompt":"[supervisor-heartbeat] hello","cadence":{"type":"cron","expression":"*/5 * * * *"},
  "target":{"type":"agent","agentId":"$tgt"},"status":"$st","createdAt":"$(fx_iso 900000)","updatedAt":"$(fx_iso "$upd")",
  "nextRunAt":$nx,"lastRunAt":$lr,"runs":$r}
 J
