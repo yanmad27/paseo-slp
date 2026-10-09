@@ -1263,6 +1263,22 @@ else
   fail "rendered prompts wrong: the Supervisor must name an existing slp-wait, the Lead must not"
 fi
 
+# Rendered prompt byte budget: every seat's prompt is paid for on every turn, so it may not grow
+# past the d935943 baseline (the header line is skipped and the install path normalised, so the
+# count depends on neither the version nor where the install lives). Tighten wording elsewhere
+# to add a rule; raise a budget only on a Human decision.
+BUDGET_OK=1
+for seat_budget in supervisor:58068 lead:46706 peer:29464; do
+  seat="${seat_budget%%:*}"; budget="${seat_budget##*:}"
+  size="$(tail -n +2 "$ROOM/$seat.md" | sed "s|$ROOM|@R@|g" | wc -c | tr -d ' ')"
+  if [ "$size" -gt "$budget" ]; then BUDGET_OK=0; echo "  rendered $seat prompt is $size bytes, budget $budget"; fi
+done
+if [ "$BUDGET_OK" = 1 ]; then
+  ok "rendered Supervisor, Lead and Peer prompts are within their byte budgets"
+else
+  fail "a rendered prompt grew past its byte budget: tighten existing wording instead"
+fi
+
 # claude-lead's rendered denies are an exact set: main's baseline (Agent, Task, and the three
 # spawners by name) plus Bash(<path>:*) for every spawner copy and symlink target install.sh
 # discovers on the render's PATH (mirrored here), plus exactly slp-wait by basename and by the
