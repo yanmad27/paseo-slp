@@ -93,7 +93,7 @@ while delegated work runs, and costs no tokens while blocked.
   Supervisor writes the answer and the `🕒` state as visible assistant text
   (never only thinking) as the final message of that turn and ends it; its
   heartbeat re-arms the wait, so a no-spinner gap follows each person
-  message: normally up to 2 minutes, rarely up to about 4 if Paseo skips a
+  message: normally up to 5 minutes, rarely up to about 10 if Paseo skips a
   slot (a known Paseo-side limit: a slot firing while the turn is still
   ending is skipped, not queued, and the scheduler can record a skipped slot
   twice). It first routes any instruction in the message and confirms the
@@ -344,7 +344,7 @@ target, so the Supervisor stops spinning.
     <sha>`. For that reason the Supervisor's next heartbeat turn (not the
     10-minute rule) prompts the Lead once to relaunch the watch Peer, and
     until then each turn ends on `🕒 Working`. The no-spinner gap is up to
-    one heartbeat slot: normally 2 minutes or less, rarely about 4. Lead
+    one heartbeat slot: normally 5 minutes or less, rarely about 10. Lead
     relaunches the watch once; if that again gets "no checks reported",
     Lead treats the commit as having no CI (path filters, no trigger, or CI
     not configured) and either proceeds without CI evidence per its

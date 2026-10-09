@@ -33,7 +33,7 @@ Cases:
   runs and the wait was interrupted; the reply text (not thinking) must give
   a visible answer first and END on the `🕒 Working` tree block (`&emsp;&ensp;`-indented Peers) — never `✅`/`❓`,
   and no `slp-wait` re-arm after it (text or Bash call): the heartbeat
-  restarts the spin (normally within 2 minutes, rarely up to about 4).
+  restarts the spin (normally within 5 minutes, rarely up to about 10).
 - `behaviour-wait-handoff`: nothing in the room runs, but a Lead's latest
   report is a STATUS and its Peer just finished — the Supervisor re-reads
   the Lead's status and waits on it or prompts it (a `🕒` state, never
