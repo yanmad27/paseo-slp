@@ -694,6 +694,9 @@ if [ "$DO_PASEO" = 1 ]; then
   # @@SLP_WAIT@@ token is replaced with it. Only the Supervisor waits; Leads and Peers are denied.
   cp "$SRC/paseo/bin/slp-wait" "$ROOM_HOME/bin/slp-wait"
   chmod 755 "$ROOM_HOME/bin/slp-wait"
+  # slp-reviewer-check: the reviewer sandbox self-check. Installed only; neither this script nor CI runs it.
+  cp "$SRC/paseo/bin/slp-reviewer-check" "$ROOM_HOME/bin/slp-reviewer-check"
+  chmod 755 "$ROOM_HOME/bin/slp-reviewer-check"
   # slp-journal: stdlib-Python message-envelope + journal helper. Needs python3 >= 3.9; without it
   # the helper is skipped with a warning (the install does not fail). Journals are never created here.
   if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
@@ -732,12 +735,13 @@ if [ "$DO_PASEO" = 1 ]; then
       | sed "s|@@SLP_WAIT@@|$SLP_WAIT_SED|g"  # drop the frontmatter
   } > "$ROOM_HOME/supervisor.md"
 
-  for role in supervisor lead peer; do
+  for role in supervisor lead peer reviewer; do
     RUNTIME="$ROOM_HOME/claude-$role"
+    PROMPT_ROLE="$role"; [ "$role" != reviewer ] || PROMPT_ROLE=peer  # the reviewer seat runs the Peer prompt
     mkdir -p "$RUNTIME/output-styles" "$RUNTIME/skills"
     {
       printf -- '---\nname: slp-%s\ndescription: Supervisor → Lead → Peer room, %s seat\nkeep-coding-instructions: true\n---\n\n' "$role" "$role"
-      cat "$ROOM_HOME/$role.md"
+      cat "$ROOM_HOME/$PROMPT_ROLE.md"
     } > "$RUNTIME/output-styles/slp-$role.md"
 
     # The user's settings, with the seat's output style, and without this plugin: no seat
@@ -796,6 +800,45 @@ if [ "$DO_PASEO" = 1 ]; then
         else . end
       ' "$RUNTIME/settings.json.tmp" > "$RUNTIME/settings.json"
       rm -f "$RUNTIME/settings.json.tmp"
+    fi
+
+    if [ "$role" = reviewer ]; then
+      # Restriction keys, merged last so they win over the user's settings: deny rules beat allow rules, the
+      # sandbox block is replaced (no excludedCommands, no extra writable dirs, no unsandboxed retry), and the
+      # user's Bash/Edit allow rules are dropped. Writes under $HOME (the launch cwd is writable by default, and
+      # the docs have no cwd-relative form in user settings) and under SLP_REVIEWER_DENY_WRITE are denied;
+      # the temp dir is outside $HOME on macOS. Doc-claimed only: slp-reviewer-check probes each key.
+      REVIEWER_DENY=("$HOME")
+      if [ -n "${SLP_REVIEWER_DENY_WRITE:-}" ]; then
+        IFS=: read -r -a REVIEWER_EXTRA <<< "$SLP_REVIEWER_DENY_WRITE"
+        REVIEWER_DENY+=("${REVIEWER_EXTRA[@]}")
+      fi
+      REVIEWER_DENY_JSON="$(jq -cn '$ARGS.positional | map(select(. != "")) | unique' --args "${REVIEWER_DENY[@]}")"
+      jq --argjson dw "$REVIEWER_DENY_JSON" --arg home "$HOME" --arg room "$ROOM_HOME" '
+        (["/.config/gh", "/.ssh", "/.aws", "/.netrc", "/.codex"] | map($home + .)) as $homeCreds
+        | ($homeCreds + [$room + "/auth"]) as $credPaths
+        | (.permissions | if type == "object" then . else {} end) as $perm
+        | .permissions = ($perm
+            | del(.additionalDirectories)
+            | .defaultMode = "default"
+            | .disableBypassPermissionsMode = "disable"
+            | .allow = (((.allow // []) | map(select(type == "string" and (test("^(Bash|Edit|Write|NotebookEdit)") | not))))
+                + ["Read(//**)", "mcp__paseo__send_agent_prompt", "mcp__paseo__get_agent_status"] | unique)
+            | .deny = (((.deny // [])
+                + ["WebFetch", "WebSearch", "Bash(git push:*)", "Bash(gh:*)"]
+                + ($dw | map("Edit(/" + . + "/**)"))
+                + ($credPaths | map("Read(/" + . + ")", "Read(/" + . + "/**)"))) | unique))
+        | .sandbox = {
+            enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: true, autoAllowBashIfSandboxed: true,
+            filesystem: {denyWrite: $dw, allowWrite: [$room + "/state"]},
+            network: {allowedDomains: []},
+            credentials: {
+              files: ($credPaths | map({path: ., mode: "deny"})),
+              envVars: (["GH_TOKEN", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] | map({name: ., mode: "deny"}))}}
+        | if (.env | type) == "object" then .env |= del(.GH_TOKEN, .GITHUB_TOKEN) else . end
+      ' "$RUNTIME/settings.json" > "$RUNTIME/settings.json.tmp" \
+        && mv "$RUNTIME/settings.json.tmp" "$RUNTIME/settings.json" \
+        || { rm -f "$RUNTIME/settings.json.tmp"; echo "ERROR: could not render the reviewer sandbox settings; the reviewer would run unrestricted. Aborting." >&2; exit 1; }
     fi
 
     for shared in plugins agents commands; do
@@ -905,7 +948,30 @@ SLP_JOURNAL="$ROOM_HOME/state/journal.jsonl" CODEX_HOME="$CODEX_RT" exec "$CODEX
   -c "developer_instructions='''\$(cat "$ROOM_HOME/peer.md")'''" "\$@"
 LAUNCHER
   chmod +x "$ROOM_HOME/bin/codex-peer"
+  # The Codex reviewer: the Peer runtime and prompt, a read-only sandbox, approvals off (a blocked action fails
+  # instead of prompting), a core-only subprocess environment. Its CODEX_HOME copies the config and rules. A
+  # separate login is not something install.sh can create, so auth.json is linked like codex-peer's: the model
+  # can read the shared login (a limit, docs/REVIEWER_SANDBOX.md). Read-only means no temp-dir checks on Codex.
+  CODEX_RV="$ROOM_HOME/codex-reviewer"
+  mkdir -p "$CODEX_RV/rules"
+  [ ! -f "$CODEX_RT/config.toml" ] || cp "$CODEX_RT/config.toml" "$CODEX_RV/config.toml"
+  cp "$CODEX_RT/rules/room.rules" "$CODEX_RV/rules/room.rules"
+  for shared in auth.json AGENTS.md skills plugins; do
+    if [ -e "$CODEX_USER_HOME/$shared" ] && { [ -L "$CODEX_RV/$shared" ] || [ ! -e "$CODEX_RV/$shared" ]; }; then
+      ln -sfn "$CODEX_USER_HOME/$shared" "$CODEX_RV/$shared"
+    fi
+  done
+  cat > "$ROOM_HOME/bin/codex-reviewer" <<LAUNCHER
+#!/bin/sh
+# Generated by install.sh: Codex in the room's reviewer runtime — the Peer role as developer instructions,
+# sandbox_mode=read-only, approval_policy=never, a core-only subprocess environment, native sub-agents off.
+# Doc-claimed only: run slp-reviewer-check to probe it.
+SLP_JOURNAL="$ROOM_HOME/state/journal.jsonl" CODEX_HOME="$CODEX_RV" exec "$CODEX_BIN" -c 'sandbox_mode="read-only"' -c 'approval_policy="never"' -c 'shell_environment_policy.inherit="core"' -c agents.enabled=false -c features.multi_agent=false -c $V2_OFF \\
+  -c "developer_instructions='''\$(cat "$ROOM_HOME/peer.md")'''" "\$@"
+LAUNCHER
+  chmod +x "$ROOM_HOME/bin/codex-reviewer"
   echo "Rendered room runtimes and prompts: $ROOM_HOME"
+  echo "Reviewer seats are configured to restrict writes, network and credentials, but nothing is verified yet: run $ROOM_HOME/bin/slp-reviewer-check"
 
   # --- 3. Paseo config ------------------------------------------------------------
 
@@ -941,6 +1007,7 @@ LAUNCHER
         else . end)
     | .agents.providers["claude-lead"].disallowedTools += $leadAbs + $noWait
     | .agents.providers["claude-peer"].disallowedTools += $leadAbs + $noWait
+    | .agents.providers["claude-reviewer"].disallowedTools += $leadAbs + $noWait
     | .agents.providers["claude-supervisor"].disallowedTools += $supAbs
   ' "$SRC/paseo/config.snippet.json" > "$WORK/snippet.json"
 

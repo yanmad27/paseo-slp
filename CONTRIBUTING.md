@@ -45,8 +45,12 @@ Invariants it checks:
   and `claude-worker`, keeps the user's own, idempotent; `--skill-only`
   installs only the skill; piped, it installs from the repository tarball.
   Tests always pass `--no-reload`.
-- Seats: every Lead/Peer profile runs full access (Claude
-  `bypassPermissions`, Codex `full-access`); `claude-lead`/`claude-peer` set
+- Seats: every Lead/writable Peer profile runs full access (Claude
+  `bypassPermissions`, Codex `full-access`); `Review peer`/`Codex review peer`
+  use `claude-reviewer`/`codex-reviewer` (non-full-access modes, restricted
+  runtimes, `docs/REVIEWER_SANDBOX.md`; `validate.sh` checks the rendering
+  statically and `slp-reviewer-check --dry-run`, never the real probes);
+  `claude-lead`/`claude-peer` set
   `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_OAUTH_TOKEN`, `codex-peer` uses its
   launcher; Peer providers keep
   `send_agent_prompt` and disable `create_agent` and schedule control.

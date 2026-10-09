@@ -55,11 +55,11 @@
         "id": "agent_profile_slp_review_peer",
         "name": "Review peer",
         "icon": "eye",
-        "provider": "claude-peer",
+        "provider": "claude-reviewer",
         "model": "claude-sonnet-5-5",
-        "modeId": "bypassPermissions",
+        "modeId": "default",
         "thinkingOptionId": "medium",
-        "notes": "Launched by a Lead. Read-only Peer — read-only by its brief, since every room seat runs with full permissions: independent review of an exact candidate against its acceptance evidence, architecture questions, committee member.\nNever edits files."
+        "notes": "Launched by a Lead. Read-only Peer on the claude-reviewer provider: its runtime sets Edit/web/credential denies and a no-network Bash sandbox, but each guarantee counts only after `slp-reviewer-check` passes it (until then: unverified). Its brief still says read-only. Independent review of an exact candidate against its acceptance evidence, architecture questions, committee member.\nNever edits files."
       },
       {
         "id": "agent_profile_slp_codex_peer",
@@ -75,11 +75,11 @@
         "id": "agent_profile_slp_codex_review_peer",
         "name": "Codex review peer",
         "icon": "eye",
-        "provider": "codex-peer",
+        "provider": "codex-reviewer",
         "model": "gpt-6.1-sol",
-        "modeId": "full-access",
+        "modeId": "auto",
         "thinkingOptionId": "medium",
-        "notes": "Launched by a Lead. Read-only Peer from another model family — read-only by its brief, since every room seat runs with full permissions: cross-family review of Claude-written candidates, plan review, committee member, debate tie-breaker.\nNever edits files."
+        "notes": "Launched by a Lead. Read-only Peer from another model family on the codex-reviewer provider: launcher sets sandbox_mode=read-only, approval_policy=never, no network, but each guarantee counts only after `slp-reviewer-check` passes it (until then: unverified); Paseo's modeId-to-flag mapping is not probed. Its brief still says read-only. Cross-family review of Claude-written candidates, plan review, committee member, debate tie-breaker.\nNever edits files."
       }
     ]
   },
@@ -173,12 +173,83 @@
           ]
         }
       },
+      "claude-reviewer": {
+        "extends": "claude",
+        "label": "Claude Reviewer",
+        "description": "Reviewer seat — the Peer runtime plus a Bash sandbox, Edit/web/credential denies and subprocess env scrubbing; whether they hold is reported by slp-reviewer-check",
+        "env": {
+          "CLAUDE_CONFIG_DIR": "@@ROOM_HOME@@/claude-reviewer",
+          "SLP_JOURNAL": "@@ROOM_HOME@@/state/journal.jsonl",
+          "CLAUDE_CODE_OAUTH_TOKEN": "@@CLAUDE_OAUTH_TOKEN@@",
+          "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1"
+        },
+        "disallowedTools": [
+          "Agent",
+          "Task",
+          "Bash(claude:*)",
+          "Bash(codex:*)",
+          "Bash(paseo:*)",
+          "Bash(slp-wait:*)"
+        ],
+        "paseoTools": {
+          "disabledTools": [
+            "create_agent",
+            "cancel_agent",
+            "kill_agent",
+            "archive_agent",
+            "update_agent",
+            "set_agent_mode",
+            "create_workspace",
+            "archive_workspace",
+            "rename_workspace",
+            "create_schedule",
+            "create_heartbeat",
+            "delete_schedule",
+            "delete_heartbeat",
+            "update_schedule",
+            "pause_schedule",
+            "resume_schedule",
+            "run_schedule_once",
+            "respond_to_permission"
+          ]
+        }
+      },
       "codex-peer": {
         "extends": "codex",
         "label": "Codex Peer",
         "description": "Peer seat on Codex — the room protocol and Peer role are its developer instructions; can message its Lead (send_agent_prompt) but cannot spawn or control agents",
         "command": [
           "@@ROOM_HOME@@/bin/codex-peer"
+        ],
+        "paseoTools": {
+          "disabledTools": [
+            "create_agent",
+            "cancel_agent",
+            "kill_agent",
+            "archive_agent",
+            "update_agent",
+            "set_agent_mode",
+            "create_workspace",
+            "archive_workspace",
+            "rename_workspace",
+            "create_schedule",
+            "create_heartbeat",
+            "delete_schedule",
+            "delete_heartbeat",
+            "update_schedule",
+            "pause_schedule",
+            "resume_schedule",
+            "run_schedule_once",
+            "respond_to_permission"
+          ]
+        }
+      },
+      "codex-reviewer": {
+        "extends": "codex",
+        "label": "Codex Reviewer",
+        "description": "Reviewer seat on Codex — the Peer runtime in a read-only sandbox with approvals off; whether it holds is reported by slp-reviewer-check",
+        "command": [
+          "@@ROOM_HOME@@/bin/codex-reviewer"
         ],
         "paseoTools": {
           "disabledTools": [
