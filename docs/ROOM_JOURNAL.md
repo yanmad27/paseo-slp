@@ -87,8 +87,9 @@ The full lifecycle state machine is out of scope here.
   can be taken in a temp dir.
 - Effectively-once processing comes from dedup plus idempotent handlers; this is not exactly-once.
 - Durability assumes a local filesystem that honours `fsync`. Each append is fsynced; when the
-  journal or lock file is created, and when the journal directory is created, the containing
-  directory is fsynced too. The test checks that directory fsyncs are issued, not that data survives
+  journal or lock file is created, the journal's directory is fsynced; missing directory levels are
+  created one at a time (0700) and each new directory's containing directory (the pre-existing
+  ancestor included) is fsynced. The test checks that directory fsyncs are issued, not that data survives
   power loss; a disk that lies about fsync is outside what is tested.
 - The whole journal is re-read on each operation (O(n)); fine for room-sized journals, not tuned.
 - Nothing authenticates the sender: `senderAgentId` is a claim, not an identity proof.

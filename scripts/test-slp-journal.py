@@ -399,21 +399,34 @@ class ReviewRepairTests(Base):
         self.assertIn("st.st_uid != os.geteuid()", src)
 
     def test_dir_fsync_on_create(self):
-        # strace-free check: the helper calls fsync on the parent directory when it creates files
         import importlib.machinery, importlib.util
         loader = importlib.machinery.SourceFileLoader("slpj", CLI)
-        spec = importlib.util.spec_from_loader("slpj", loader)
-        m = importlib.util.module_from_spec(spec)
+        m = importlib.util.module_from_spec(importlib.util.spec_from_loader("slpj", loader))
         loader.exec_module(m)
-        calls = []
+        existing = os.path.join(self.dir, "existing")
+        os.mkdir(existing)
+        jp = os.path.join(existing, "newA", "newB", "journal.jsonl")
+        synced = []
         real = os.fsync
-        m.os.fsync = lambda fd: (calls.append(os.fstat(fd).st_mode & 0o170000), real(fd))[1]
+
+        def spy(fd):
+            if os.fstat(fd).st_mode & 0o170000 == 0o040000:
+                synced.append(os.path.realpath("/dev/fd/%d" % fd) if sys.platform != "darwin" else self._fd_path(fd))
+            return real(fd)
+        m.os.fsync = spy
         try:
-            with m.Journal(self.j, write=True) as j:
+            with m.Journal(jp, write=True) as j:
                 j.append_message(env("m1", "QUESTION"))
         finally:
             m.os.fsync = real
-        self.assertGreaterEqual(calls.count(0o040000), 3)  # journal dir parent, lock create, journal create
+        for d in (existing, os.path.join(existing, "newA"), os.path.join(existing, "newA", "newB")):
+            self.assertIn(d, synced)
+        self.assertEqual(oct(os.stat(os.path.join(existing, "newA")).st_mode & 0o777), "0o700")
+
+    @staticmethod
+    def _fd_path(fd):
+        import fcntl
+        return os.fsdecode(fcntl.fcntl(fd, 50, b"\0" * 1024).split(b"\0")[0])  # F_GETPATH (macOS)
 
 
 if __name__ == "__main__":

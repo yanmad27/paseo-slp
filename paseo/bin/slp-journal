@@ -332,6 +332,23 @@ def fsync_dir(d):
         os.close(fd)
 
 
+def make_dirs_durable(d):
+    """Create missing levels one at a time (0700), fsyncing each new directory's containing directory."""
+    missing = []
+    while not os.path.isdir(d):
+        missing.append(d)
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    for m in reversed(missing):
+        try:
+            os.mkdir(m, 0o700)
+        except FileExistsError:
+            pass
+        fsync_dir(os.path.dirname(m))
+
+
 def open_new_or_existing(path, flags):
     """Open read/write, creating 0600; fsync the parent directory when this call created the file."""
     try:
@@ -354,8 +371,7 @@ class Journal:
             self.path = os.path.realpath(self.path)
         d = os.path.dirname(self.path)
         if self.write:
-            os.makedirs(d, mode=0o700, exist_ok=True)
-            fsync_dir(os.path.dirname(d))
+            make_dirs_durable(d)
         elif not os.path.isdir(d):
             raise Corrupt("journal directory does not exist")
         self.fd = None
