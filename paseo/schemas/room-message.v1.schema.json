@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yanmad27/paseo-slp/paseo/schemas/room-message.v1.schema.json",
+  "title": "SLP room message envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "roomId", "taskId", "messageId", "causationId", "senderAgentId", "recipientAgentId", "signal", "createdAt", "payload"],
+  "properties": {
+    "version": {"const": 1},
+    "roomId": {"$ref": "#/$defs/id"},
+    "taskId": {"$ref": "#/$defs/id"},
+    "messageId": {"$ref": "#/$defs/id"},
+    "causationId": {"oneOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+    "senderAgentId": {"$ref": "#/$defs/id"},
+    "recipientAgentId": {"$ref": "#/$defs/id"},
+    "signal": {"enum": ["CANDIDATE", "REVIEW", "REOPEN_REQUEST", "DEPENDENCY_REQUEST", "BLOCKED", "QUESTION", "ACK", "ACCEPT", "REJECT", "REVISED BRIEF", "HOLD", "ANSWER", "DEFER", "DONE", "STATUS", "DECISION_NEEDED", "BRIEF"]},
+    "createdAt": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"},
+    "candidateId": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "payload": {"type": "object", "x-maxSerializedBytes": 16384}
+  },
+  "allOf": [
+    {"if": {"properties": {"signal": {"enum": ["CANDIDATE", "ACCEPT", "REJECT"]}}, "required": ["signal"]},
+     "then": {"required": ["candidateId"]}},
+    {"if": {"properties": {"signal": {"const": "REVIEW"}}, "required": ["signal"]},
+     "then": {"properties": {"payload": {"required": ["kind"], "properties": {"kind": {"enum": ["candidate", "plan", "watch", "other"]}}}}}},
+    {"if": {"properties": {"signal": {"const": "REVIEW"}, "payload": {"properties": {"kind": {"const": "candidate"}}, "required": ["kind"]}}, "required": ["signal", "payload"]},
+     "then": {"required": ["candidateId"]},
+     "else": {"if": {"properties": {"signal": {"const": "REVIEW"}}, "required": ["signal"]}, "then": {"not": {"required": ["candidateId"]}}}}
+  ],
+  "$defs": {
+    "id": {"type": "string", "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}
+  }
+}
