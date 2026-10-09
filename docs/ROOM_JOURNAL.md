@@ -40,7 +40,7 @@ access is `chmod`ed to 0600 if we own it, otherwise refused (`journal-permission
 allocation, append, fsync) runs inside one exclusive `flock` on `PATH.lock`. `seq` is
 writer-assigned, gapless and monotonic; timestamps are never used for ordering.
 
-Entries: `message` (an envelope) and `delivery` (`messageId` + state `delivered | processing |
+Entries: `message` (an envelope), `control` (see Ownership) and `delivery` (`messageId` + state `delivered | processing |
 processed`), each with its own `entryId`. "Recorded" means the message entry exists.
 
 - Same `messageId` + identical envelope: no-op returning the original `seq`. Same `messageId` +
@@ -74,12 +74,113 @@ processed`), each with its own `entryId`. "Recorded" means the message entry exi
   inside, the envelope); replay uses only the stored value, so later symlink changes do not move
   recorded ownership. Also available as `scope-overlap --root R --a P --b Q`.
 
-The full lifecycle state machine is out of scope here.
+## Task state machine
+
+Validated at record time under the lock; replay applies only what was persisted. Task states:
+
+```text
+READY -> ASSIGNED -> RUNNING -> CANDIDATE_READY -> REVIEWING -> ACCEPTED
+REJECT: CANDIDATE_READY|REVIEWING -> NEEDS_REPAIR -> RUNNING (new CANDIDATE = new identity)
+BLOCKED (peer, needs payload.owner + payload.returnCondition) and DEFERRED (Lead DEFER, same fields)
+CANCELLED (control cancel) revokes ownership; REVIEWED ends a review-only task.
+```
+
+- `BRIEF` creates the task (`ASSIGNED`). `payload.kind` is `work` (default; needs `writeScope`) or
+  `review` (read-only; no `writeScope`/`lease`/`dependsOn`). A review BRIEF may name the candidate
+  under review in the envelope's `candidateId`: it must be the current, undisposed candidate, and the
+  reviewed task becomes `REVIEWING` until the review ends (`ACCEPT` meanwhile: `under-review`).
+- `ASSIGNED -> RUNNING` (and `NEEDS_REPAIR -> RUNNING`): the BRIEF (or REJECT/ANSWER/REVISED BRIEF)
+  delivery record reaching `delivered`, or the owner's first own signal on the task. No extra seat command.
+- `CANDIDATE` (owner only; also supersedes an undisposed one, which makes older reviews stale) ->
+  `CANDIDATE_READY`. Review-only tasks never take a candidate; their `REVIEW` ends them (`REVIEWED`) and a
+  candidate review returns the reviewed task to `CANDIDATE_READY`.
+- `ACCEPT` (coordinator, exact current candidate, with a review of exactly that candidate or a
+  non-empty waiver) -> `ACCEPTED`, scope released (`ownership.event = released-by-accept`).
+- `REJECT` keeps scope and owner by default (`ownership.event = kept`); `payload.ownership` =
+  `release` (scope freed, owner none, task `READY`) or `reassign` + `payload.reassignTo`
+  (`reassigned`, scope kept). `state` shows `ownership`, `owner`, `scopeReleased`.
+- `BLOCKED` is allowed from ASSIGNED/RUNNING/NEEDS_REPAIR; `DEFER` from those and BLOCKED (not while a
+  candidate awaits disposition: ACCEPT or REJECT it). `ANSWER` / `REVISED BRIEF` from the coordinator
+  resumes a BLOCKED/DEFERRED task (`ASSIGNED`). Scope stays held while blocked or deferred.
+- Peer signals QUESTION / DEPENDENCY_REQUEST / REOPEN_REQUEST / BLOCKED (and non-candidate REVIEWs) are
+  open loops until an `ANSWER` / `HOLD` / `REVISED BRIEF` / `DEFER` (with `causationId`: that signal only;
+  without: all open ones of the task) or the task's ACCEPT/REJECT (for review signals of that candidate).
+- Anything else is `illegal-transition` (reason names the state). Signals for a task with no BRIEF are
+  rejected by the seat commands; a raw `append` of a non-candidate signal for an unknown task is only
+  recorded, tracked nowhere.
+- Only the room's coordinator records BRIEF/ACCEPT/REJECT/dispositions/controls (`not-coordinator`); the
+  recorder of a BRIEF can never be its owner (`owner-is-recorder`): source write owner != coordination
+  recorder. Only the current owner may send CANDIDATE and the peer signals (`not-owner`).
+
+## Ownership
+
+- One write owner per scope. A work BRIEF is rejected (`scope-conflict`) if its scope overlaps the
+  unreleased scope of any other task - same agent or not, so there is no duplicate writer.
+- Root identity (`rootId`) is the realpath of `git rev-parse --show-toplevel` (else the root's realpath),
+  persisted at record time. Paths are canonicalized against the nearest existing ancestor (symlinks
+  resolved, nonexistent tail allowed, `..` escape = `scope-escape`) and compared by path component on
+  absolute paths: nested roots overlap; two worktrees of one repo are different directories and do not.
+- Scope metadata is not a sandbox: nothing stops an agent writing outside its scope or two agents ignoring
+  the journal; the journal only refuses to hand out overlapping claims.
+- `control` entries (journal-only, not message signals; signal text is untouched) are recorded by the
+  coordinator with `controlId` dedup like messageId: `revoke T` (owner removed, scope released, task
+  `READY`, current candidate stale), `transfer T --to X` (new owner, scope re-checked against other
+  unreleased scopes, `ASSIGNED`, current candidate stale), `cancel T`, `reconcile T [--lease ISO|none]`,
+  `lead --from A --to B`.
+- Lease: a work BRIEF may carry `payload.lease = {expiresAt}`. Expiry is read against the clock at
+  `state` / `done-check` time (`--now` overrides it) and only sets `leaseExpired` / `needsReconcile`.
+  The scope stays excluded until an explicit `reconcile` (extends or clears the lease), `revoke`,
+  `transfer` or `cancel` record. The journal cannot tell whether the old writer is still running.
+
+## Dependencies
+
+`BRIEF payload.dependsOn = [{taskId, candidateId}]` is rejected unless each upstream task (same room, work
+task) is `ACCEPTED` with exactly that `candidateId` (`dependency-not-accepted`,
+`dependency-wrong-candidate`) and the artifact is accessible, checked once at record time and persisted
+(`resolvedDeps`): the commit exists in the upstream scope root (`git cat-file -e <sha>^{commit}`) or the
+patch file (`CANDIDATE payload.patchFile`) exists with the identity's sha256 (`dependency-artifact-inaccessible`).
+A cancelled or merely closed upstream is not enough. Replay never re-checks the filesystem or git.
+
+## DONE gate and Lead replacement
+
+`done-check LEAD [--running AGENT]... [--permission-pending AGENT]...` prints one `blocker <type> <task> <detail>`
+line per open loop and exits 3 (clean: one `ok` line, exit 0; Lead not known: `unknown-lead`). Types:
+`task-open` (any non-terminal task, including assigned/running with held scope, blocked, deferred),
+`candidate-undisposed`, `signal-undisposed`, `message-unprocessed`, `message-needs-reconcile`,
+`lease-expired`, `unreleased-scope`, and the caller-supplied `agent-running` / `permission-pending`.
+The journal cannot see Paseo run or permission state: those two come only from the flags (the caller
+reads Paseo). `message-unprocessed` includes every recorded or delivered message of the Lead's rooms except
+DONE/STATUS/DECISION_NEEDED, so seats must `deliver` ... `processed` for done-check to pass.
+
+`control lead --from OLD --to NEW` (recorded by either; NEW must not own a held scope) moves the whole
+room's coordination. `state` then restores tasks, owners, scopes, candidates and open signals for NEW; OLD
+is `not-coordinator` from then on, and a BRIEF over a held scope is `scope-conflict` for anyone.
 
 ## CLI
 
-`append [FILE|-]`, `deliver <messageId> <state>`, `state`, `validate <file>`, `candidate-id <identity.json>`,
-`scope-overlap`, `contract`, `--version` (`slp-journal envelope-v1`), `--self-check`.
+Admin/low level: `append [FILE|-]`, `deliver <messageId> <state>`, `state`, `validate <file>`,
+`candidate-id <identity.json>`, `scope-overlap`, `contract`, `--version` (`slp-journal envelope-v1`),
+`--self-check`. Global: `--journal PATH` (or `SLP_JOURNAL`), `--now RFC3339Z`.
+
+Seat commands: sender `--as AGENT` (or `SLP_AGENT`), room `--room R` (or `SLP_ROOM`, or the task's room);
+recipient is derived (Lead -> owner, Peer -> coordinator); `--id` makes a retry idempotent. One command per
+signal, one output line `ok [dup] SIGNAL TASK seq=N status=S msg=ID [cid=C]` (rejections: JSON, exit 3).
+
+```text
+Lead  brief T --to PEER --root DIR --path P... [--lease ISO] [--depends TASK:CID]...   (work BRIEF)
+Lead  brief T --to PEER --review --cid CID                                             (review BRIEF)
+Peer  candidate T --base B (--commit SHA | --patch-sha H --patch-file F) --path P... [--evidence E]...
+Peer  review T [--kind plan|watch|other]                      (candidate review for a review task)
+Peer  send T BLOCKED|QUESTION|DEPENDENCY_REQUEST|REOPEN_REQUEST [--note TXT] [--owner A --return COND]
+Lead  accept T --cid C [--waive WHY]       (links the newest REVIEW of exactly C)
+Lead  reject T --cid C [--release | --reassign AGENT] [--note TXT]
+Lead  send T ANSWER|HOLD|"REVISED BRIEF"|DEFER [--cause MSGID] [--note TXT] [--owner A --return COND]
+Lead  control revoke|cancel T | transfer T --to X | reconcile T [--lease ISO|none] | lead --from A --to B
+Lead  done-check LEAD [--running ID]... [--permission-pending ID]...
+```
+
+`candidate` prints the `cid=` the Lead then uses in `accept`/`reject`/`brief --review`.
+`state` is the only command that prints JSON on success.
 
 ## Limits
 
@@ -95,7 +196,7 @@ The full lifecycle state machine is out of scope here.
   ancestor included) is fsynced. The test checks that directory fsyncs are issued, not that data survives
   power loss; a disk that lies about fsync is outside what is tested.
 - The whole journal is re-read on each operation (O(n)); fine for room-sized journals, not tuned.
-- Nothing authenticates the sender: `senderAgentId` is a claim, not an identity proof.
+- Nothing authenticates the sender (so `not-owner` / `not-coordinator` stop mistakes, not impersonation): `senderAgentId` is a claim, not an identity proof.
 
 ## Migration
 
