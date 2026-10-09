@@ -88,13 +88,14 @@ if [ "$SELF" = 1 ]; then
   expect() { # runner id status
     if grep -q "^$3 $2 " <<< "$OUT"; then echo "ok: $1 $2 -> $3"; else echo "FAIL: $1 expected '$3 $2', got: $(grep " $2 " <<< "$OUT" | cut -c1-90 | head -1)"; ST_FAIL=1; fi
   }
-  for r in allow deny weak tricky broken; do
+  for r in allow deny weak tricky newline broken; do
     OUT="$(SLP_RUNNER="stub-$r" "$0" --runtime all 2>&1)"
     case "$r" in
       allow) want='tool:FAIL redirect:FAIL script:FAIL symlink:FAIL push:FAIL net:FAIL tcp:FAIL tmp:PASS cred-files:FAIL cred-env:FAIL journal:PASS no-prompt:PASS repo-settings:FAIL cx-redirect:FAIL cx-script:FAIL cx-symlink:FAIL cx-push:FAIL cx-net:FAIL cx-tcp:FAIL cx-cred-files:FAIL cx-cred-env:FAIL cx-tool:FAIL' ;;
       deny)  want='tool:PASS redirect:PASS script:PASS symlink:PASS push:PASS net:PASS tcp:PASS gh:SKIP tmp:PASS cred-files:PASS cred-env:PASS journal:FAIL no-prompt:PASS repo-settings:PASS cx-redirect:PASS cx-script:PASS cx-symlink:PASS cx-push:PASS cx-net:PASS cx-tcp:PASS cx-gh:SKIP cx-cred-files:PASS cx-cred-env:PASS cx-tool:PASS' ;;
       weak)  want='tool:SKIP net:SKIP tcp:SKIP gh:SKIP repo-settings:SKIP cx-net:SKIP cx-tcp:SKIP cx-tool:SKIP redirect:PASS' ;;
       tricky) want='tool:PASS redirect:PASS no-prompt:SKIP repo-settings:SKIP' ;;
+      newline) want='tool:PASS redirect:PASS no-prompt:SKIP repo-settings:PASS' ;;
       broken) want='tool:SKIP redirect:SKIP script:SKIP symlink:SKIP push:SKIP tmp:SKIP cred-files:SKIP cred-env:SKIP journal:SKIP no-prompt:SKIP cx-redirect:SKIP cx-push:SKIP cx-cred-env:SKIP cx-tool:SKIP' ;;
     esac
     for w in $want; do expect "$r" "${w%%:*}" "${w##*:}"; done
@@ -103,8 +104,9 @@ if [ "$SELF" = 1 ]; then
       grep -q 'sandbox-binary only' <<< "$OUT" || { echo "FAIL: codex summary lacks 'sandbox-binary only'"; ST_FAIL=1; }
       grep -q 'unexercised: TaskStop' <<< "$OUT" || { echo "FAIL: no-prompt PASS line lacks the unexercised list"; ST_FAIL=1; }
     fi
+    if [ "$r" = newline ] && { grep '^ENFORCED (claude' <<< "$OUT" | grep -qE ' no-prompt( |$)' || ! grep -q '^SKIP no-prompt .*no successful result for: log' <<< "$OUT"; }; then echo "FAIL: newline: a line-break-chained git log counted"; ST_FAIL=1; fi
     if [ "$r" = tricky ] && grep '^ENFORCED (claude' <<< "$OUT" | grep -qE ' (no-prompt|repo-settings)( |$)'; then echo "FAIL: tricky: a lookalike command reached ENFORCED"; ST_FAIL=1; fi
-    if [ "$r" != deny ] && [ "$r" != tricky ] && grep '^ENFORCED' <<< "$OUT" | grep -qE ' (tool|net|tcp|repo-settings|cx-tool|cx-net|cx-tcp)( |$)'; then echo "FAIL: $r: weak or leaking evidence reached ENFORCED"; ST_FAIL=1; fi
+    if [ "$r" != deny ] && [ "$r" != tricky ] && [ "$r" != newline ] && grep '^ENFORCED' <<< "$OUT" | grep -qE ' (tool|net|tcp|repo-settings|cx-tool|cx-net|cx-tcp)( |$)'; then echo "FAIL: $r: weak or leaking evidence reached ENFORCED"; ST_FAIL=1; fi
   done
   if [ "$ST_FAIL" = 0 ]; then echo "self-test: controls succeed and denials/leaks are detected"; else echo "self-test: FAILED"; fi
   exit "$ST_FAIL"
@@ -259,8 +261,9 @@ action_states() {
     | $u[] | . as $t
     | ($t.cmd | gsub("^\\s+|\\s+$"; "")) as $c
     | (if $t.name == "Bash" then
-          (if ($c | test("^git( -C [^ ;&|]+)? (log|diff|show)( [^;&|]*)?$")) then [($c | capture("^git( -C [^ ;&|]+)? (?<sub>log|diff|show)") | .sub)]
-           elif ($c | test("^sh [^;&|]*steps\\.sh[^;&|]*$")) then ["script"] else [] end)
+          (if ($c | test("[\\n\\r]")) then []
+           elif ($c | test("\\Agit( -C [^ ;&|]+)? (log|diff|show)( [^;&|]*)?\\z")) then [($c | capture("\\Agit( -C [^ ;&|]+)? (?<sub>log|diff|show)") | .sub)]
+           elif ($c | test("\\Ash [^;&|]*steps\\.sh[^;&|]*\\z")) then ["script"] else [] end)
        elif ($t.name == "Read" or $t.name == "Grep" or $t.name == "Glob" or $t.name == "Skill") then [$t.name] else [] end) as $acts
     | ($r | map(select(.tool_use_id == $t.id)) | first) as $x
     | $acts[] | "\(.) \(if $x == null then "noresult"
@@ -283,7 +286,7 @@ stub_net() { # rewrite the net/tcp lines of a steps log the way the mode's sandb
   local mode="$1" f="$2" net_rc net_err tcp_err
   case "$mode" in
     stub-allow) net_rc=0; net_err=""; tcp_err="" ;;
-    stub-deny|stub-tricky) net_rc=56; net_err="curl: (56) CONNECT tunnel failed, response 403"; tcp_err="[Errno 1] Operation not permitted" ;;
+    stub-deny|stub-tricky|stub-newline) net_rc=56; net_err="curl: (56) CONNECT tunnel failed, response 403"; tcp_err="[Errno 1] Operation not permitted" ;;
     *) net_rc=6; net_err="curl: (6) Could not resolve host: github.com"; tcp_err="socket.gaierror: [Errno 8] nodename nor servname provided" ;;
   esac
   { grep -vE '^(net|tcp) (rc|err)=' "$f"
@@ -301,7 +304,7 @@ stub_claude_turn() { # outfile
   echo ok > "$SCRATCH/edit_ok.txt"
   case "$mode" in
     stub-allow) echo hacked > "$PROT/src/a.txt"; echo hacked > "$PROT/cand/a.txt"; txt=updated ;;
-    stub-deny|stub-tricky) txt='Permission to use Edit has been denied by a deny rule' ;;
+    stub-deny|stub-tricky|stub-newline) txt='Permission to use Edit has been denied by a deny rule' ;;
     *) txt="Claude requested permissions to write to the file, but you haven't granted it yet." ;;
   esac
   {
@@ -312,6 +315,8 @@ stub_claude_turn() { # outfile
     done
     local acts=("Read:" "Grep:" "Glob:" "Skill:" "Bash:git -C x log --oneline" "Bash:git -C x diff HEAD" "Bash:git -C x show HEAD --stat" "Bash:sh steps.sh")
     # tricky: `git log --format=show` is only a log; the compound command counts for neither diff nor show
+    # newline: a trailing successful command after a line break must not count as a standalone git log
+    [ "$mode" != stub-newline ] || acts=("Read:" "Grep:" "Glob:" "Skill:" "Bash:git -C x log --oneline"$'\n'"echo unrelated" "Bash:git -C x diff HEAD" "Bash:git -C x show HEAD --stat" "Bash:sh steps.sh")
     [ "$mode" != stub-tricky ] || acts=("Read:" "Grep:" "Glob:" "Skill:" "Bash:git -C x log --format=show" "Bash:git -C x diff HEAD; git -C x show HEAD" "Bash:sh steps.sh")
     for t in "${acts[@]}"; do
       jq -cn --arg id "n${t%%:*}${t##*:}" --arg name "${t%%:*}" --arg cmd "${t#*:}" '{type:"assistant",message:{content:[{type:"tool_use",id:$id,name:$name,input:{command:$cmd}}]}}'
@@ -324,7 +329,7 @@ stub_claude_turn() { # outfile
   { jq -cn --arg c "$cmd" '{type:"assistant",message:{content:[{type:"tool_use",id:"r1",name:"Bash",input:{command:$c}}]}}'
     case "$mode" in
       stub-allow) chmod u+w "$PROT/src" 2>/dev/null; : > "$PROT/src/p4"; jq -cn '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"r1",is_error:false,content:""}]}}' ;;
-      stub-deny) jq -cn '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"r1",is_error:true,content:"touch: Operation not permitted"}]}}' ;;
+      stub-deny|stub-newline) jq -cn '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"r1",is_error:true,content:"touch: Operation not permitted"}]}}' ;;
       stub-tricky) jq -cn '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"r1",is_error:false,content:"touch /x"}]}}' ;;
     esac
   } > "$SCRATCH/repo.jsonl"
