@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.8.0](https://github.com/yanmad27/paseo-slp/compare/v2.7.0...v2.8.0) (2026-10-09)
+
+
+### Features
+
+* Cheap peer takes summaries of supplied text; Peer context is 1M, not 200k ([#58](https://github.com/yanmad27/paseo-slp/issues/58)) ([029a211](https://github.com/yanmad27/paseo-slp/commit/029a21143b1918d1824aac7ecede721a5a67dd5f))
+* Jev on/off switch for the room (default off) ([#59](https://github.com/yanmad27/paseo-slp/issues/59)) ([b8b0c24](https://github.com/yanmad27/paseo-slp/commit/b8b0c24d12c36fefcfe6bfde61006adb07217568))
+* Supervisor room heartbeat every 5 minutes instead of 2 ([#61](https://github.com/yanmad27/paseo-slp/issues/61)) ([22ad317](https://github.com/yanmad27/paseo-slp/commit/22ad3177b04363efa4ac919a0ac6bca1745d0065))
+
 ## [2.7.0](https://github.com/yanmad27/paseo-slp/compare/v2.6.0...v2.7.0) (2026-10-08)
 
 
