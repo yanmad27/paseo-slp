@@ -26,6 +26,19 @@ def run(args, stdin=None):
     return p.returncode, j
 
 
+def fd_path(fd):
+    """Path of an open fd: F_GETPATH on macOS, /proc/self/fd (or /dev/fd) elsewhere."""
+    if sys.platform == "darwin":
+        import fcntl
+        return os.fsdecode(fcntl.fcntl(fd, fcntl.F_GETPATH, b"\0" * 1024).split(b"\0")[0])
+    for tpl in ("/proc/self/fd/%d", "/dev/fd/%d"):
+        try:
+            return os.path.realpath(os.readlink(tpl % fd))
+        except OSError:
+            continue
+    raise unittest.SkipTest("no way to map an fd to its path on this platform")
+
+
 def cid_of(ident):
     c = {"base": ident["base"], "changedPaths": sorted(set(ident["changedPaths"])),
          "evidenceRefs": sorted(set(ident.get("evidenceRefs", [])))}
@@ -411,7 +424,7 @@ class ReviewRepairTests(Base):
 
         def spy(fd):
             if os.fstat(fd).st_mode & 0o170000 == 0o040000:
-                synced.append(os.path.realpath("/dev/fd/%d" % fd) if sys.platform != "darwin" else self._fd_path(fd))
+                synced.append(fd_path(fd))
             return real(fd)
         m.os.fsync = spy
         try:
@@ -436,7 +449,7 @@ class ReviewRepairTests(Base):
 
         def spy(fd):
             if os.fstat(fd).st_mode & 0o170000 == 0o040000:
-                synced.append(self._fd_path(fd))
+                synced.append(fd_path(fd))
             return real(fd)
         m.os.fsync = spy
         try:
@@ -462,7 +475,7 @@ class ReviewRepairTests(Base):
 
         def spy(fd):
             if os.fstat(fd).st_mode & 0o170000 == 0o040000:
-                synced.append(self._fd_path(fd))
+                synced.append(fd_path(fd))
             return real(fd)
         m.os.fsync = spy
         try:
@@ -495,7 +508,7 @@ class ReviewRepairTests(Base):
 
         def spy(fd):
             if os.fstat(fd).st_mode & 0o170000 == 0o040000:
-                synced.append(self._fd_path(fd))
+                synced.append(fd_path(fd))
             return real(fd)
         m.os.fsync = spy
         try:
@@ -520,11 +533,6 @@ class ReviewRepairTests(Base):
                 m.fsync_dir(self.dir)
         finally:
             m.os.fsync = real
-
-    @staticmethod
-    def _fd_path(fd):
-        import fcntl
-        return os.fsdecode(fcntl.fcntl(fd, 50, b"\0" * 1024).split(b"\0")[0])  # F_GETPATH (macOS)
 
 
 if __name__ == "__main__":
