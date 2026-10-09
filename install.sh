@@ -804,44 +804,59 @@ if [ "$DO_PASEO" = 1 ]; then
 
     if [ "$role" = reviewer ]; then
       # Restriction keys, merged last so they win over the user's settings: deny rules beat allow rules, the
-      # sandbox block is replaced (no excludedCommands, no extra writable dirs, no unsandboxed retry), and the
-      # user's Bash/Edit allow rules are dropped. Writes under $HOME (the launch cwd is writable by default, and
-      # the docs have no cwd-relative form in user settings) and under SLP_REVIEWER_DENY_WRITE are denied;
-      # the temp dir is outside $HOME on macOS. Doc-claimed only: slp-reviewer-check probes each key.
+      # sandbox block is replaced (no excludedCommands, no allowWrite, no unsandboxed retry), the user's
+      # Bash/Edit/Write and non-paseo mcp__ allow rules, hooks, statusLine, credential helpers, MCP server lists
+      # and most env are dropped. Writes under $HOME (the launch cwd is writable by default and the docs have no
+      # cwd-relative form in user settings) and under SLP_REVIEWER_DENY_WRITE are denied; the temp dir is outside
+      # $HOME on macOS and is the only place the Edit/Write tools may write. Doc-claimed: slp-reviewer-check probes it.
       REVIEWER_DENY=("$HOME")
       if [ -n "${SLP_REVIEWER_DENY_WRITE:-}" ]; then
         IFS=: read -r -a REVIEWER_EXTRA <<< "$SLP_REVIEWER_DENY_WRITE"
-        REVIEWER_DENY+=("${REVIEWER_EXTRA[@]}")
+        for extra in "${REVIEWER_EXTRA[@]}"; do
+          case "$extra" in
+            /*) REVIEWER_DENY+=("$extra") ;;
+            "") ;;
+            *) echo "ERROR: SLP_REVIEWER_DENY_WRITE entries must be absolute paths (got '$extra')." >&2; exit 1 ;;
+          esac
+        done
       fi
-      REVIEWER_DENY_JSON="$(jq -cn '$ARGS.positional | map(select(. != "")) | unique' --args "${REVIEWER_DENY[@]}")"
-      jq --argjson dw "$REVIEWER_DENY_JSON" --arg home "$HOME" --arg room "$ROOM_HOME" '
-        (["/.config/gh", "/.ssh", "/.aws", "/.netrc", "/.codex"] | map($home + .)) as $homeCreds
-        | ($homeCreds + [$room + "/auth"]) as $credPaths
+      REVIEWER_DENY_JSON="$(jq -cn '$ARGS.positional | unique' --args "${REVIEWER_DENY[@]}")"
+      REVIEWER_TMP_JSON="$(jq -cn --arg t "$(cd -P "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P || echo /tmp)" '[$t, "/tmp", "/private/tmp"] | unique')"
+      jq --argjson dw "$REVIEWER_DENY_JSON" --argjson tmpd "$REVIEWER_TMP_JSON" --arg home "$HOME" --arg room "$ROOM_HOME" '
+        (["/.config/gh", "/.ssh", "/.aws", "/.netrc", "/.npmrc", "/.codex", "/.claude", "/.claude.json", "/.paseo/config.json"] | map($home + .)) as $homeCreds
+        | (["/auth", "/claude-supervisor", "/claude-lead", "/claude-peer", "/codex-peer", "/codex-reviewer"] | map($room + .)) as $roomCreds
+        | ($homeCreds + $roomCreds) as $credPaths
         | (.permissions | if type == "object" then . else {} end) as $perm
         | .permissions = ($perm
             | del(.additionalDirectories)
             | .defaultMode = "default"
             | .disableBypassPermissionsMode = "disable"
-            | .allow = (((.allow // []) | map(select(type == "string" and (test("^(Bash|Edit|Write|NotebookEdit)") | not))))
-                + ["Read(//**)", "mcp__paseo__send_agent_prompt", "mcp__paseo__get_agent_status"] | unique)
+            | .allow = (((.allow // []) | map(select(type == "string" and (test("^(Bash|Edit|Write|NotebookEdit|MultiEdit|mcp__)") | not))))
+                + ["Read(//**)", "Grep", "Glob", "Skill", "TaskStop", "mcp__paseo__send_agent_prompt", "mcp__paseo__get_agent_status"]
+                + ($tmpd | map("Edit(/" + . + "/**)", "Write(/" + . + "/**)")) | unique)
             | .deny = (((.deny // [])
                 + ["WebFetch", "WebSearch", "Bash(git push:*)", "Bash(gh:*)"]
-                + ($dw | map("Edit(/" + . + "/**)"))
+                + ($dw | map("Edit(/" + . + "/**)", "Write(/" + . + "/**)"))
                 + ($credPaths | map("Read(/" + . + ")", "Read(/" + . + "/**)"))) | unique))
         | .sandbox = {
             enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: true, autoAllowBashIfSandboxed: true,
-            filesystem: {denyWrite: $dw, allowWrite: [$room + "/state"]},
+            filesystem: {denyWrite: $dw},
             network: {allowedDomains: []},
             credentials: {
               files: ($credPaths | map({path: ., mode: "deny"})),
               envVars: (["GH_TOKEN", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] | map({name: ., mode: "deny"}))}}
-        | if (.env | type) == "object" then .env |= del(.GH_TOKEN, .GITHUB_TOKEN) else . end
+        | del(.hooks, .statusLine, .apiKeyHelper, .awsAuthRefresh, .awsCredentialExport, .mcpServers, .enabledMcpjsonServers, .enableAllProjectMcpServers)
+        | .enabledPlugins = {}
+        | .env = ((.env // {}) | if type == "object" then with_entries(select(.key | test("^(LANG|LC_[A-Z]+|TZ|NO_COLOR|ANTHROPIC_(DEFAULT_[A-Z_]+_MODEL|MODEL|SMALL_FAST_MODEL))$"))) else {} end)
+        | if .env == {} then del(.env) else . end
       ' "$RUNTIME/settings.json" > "$RUNTIME/settings.json.tmp" \
+        && chmod 600 "$RUNTIME/settings.json.tmp" \
         && mv "$RUNTIME/settings.json.tmp" "$RUNTIME/settings.json" \
         || { rm -f "$RUNTIME/settings.json.tmp"; echo "ERROR: could not render the reviewer sandbox settings; the reviewer would run unrestricted. Aborting." >&2; exit 1; }
     fi
 
     for shared in plugins agents commands; do
+      [ "$role" != reviewer ] || { rm -f "$RUNTIME/$shared" 2>/dev/null; continue; }  # plugins can carry hooks that run outside the sandbox
       if [ -e "$CLAUDE_HOME/$shared" ] && { [ -L "$RUNTIME/$shared" ] || [ ! -e "$RUNTIME/$shared" ]; }; then
         ln -sfn "$CLAUDE_HOME/$shared" "$RUNTIME/$shared"
       fi

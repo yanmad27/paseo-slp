@@ -416,7 +416,7 @@ if HOME="$MIGRATE_HOME" "$REPO_ROOT/install.sh" --paseo-only --no-reload >/dev/n
   if jq -e --slurpfile snip "$SNIPPET" '
       ([.daemon.agentProfiles[].name] | sort) == (["Mine"] + [$snip[0].daemon.agentProfiles[].name] | sort)
       and ([.daemon.agentProfiles[] | select(.name == "Lead") | .model] == ["claude-opus-5-5"])
-      and (.agents.providers | keys | sort) == ["claude-lead", "claude-peer", "claude-supervisor", "codex-peer", "mine-provider"]
+      and (.agents.providers | keys | sort) == ["claude-lead", "claude-peer", "claude-reviewer", "claude-supervisor", "codex-peer", "codex-reviewer", "mine-provider"]
       and .agents.providers["claude-peer"].paseoTools == $snip[0].agents.providers["claude-peer"].paseoTools' \
       "$MIGRATE_HOME/.paseo/config.json" >/dev/null; then
     ok "install.sh --paseo-only migrates a v1 config, resets managed entries, and keeps the user's own"
@@ -794,7 +794,7 @@ mkdir -p "$ALIAS_HOME"
 if HOME="$ALIAS_HOME" SLP_CLAUDE_BASE_URL=https://gateway.example.com SLP_CLAUDE_API_KEY="k e y" \
     "$REPO_ROOT/install.sh" --paseo-only --no-reload >/dev/null 2>&1 \
   && jq -e '[.agents.providers | to_entries[] | select(.key | startswith("claude-")) | .value.env
-      | .ANTHROPIC_AUTH_TOKEN == "k e y"] | length == 3 and all' "$ALIAS_HOME/.paseo/config.json" >/dev/null \
+      | .ANTHROPIC_AUTH_TOKEN == "k e y"] | length == 4 and all' "$ALIAS_HOME/.paseo/config.json" >/dev/null \
   && ! HOME="$TMP/home-endpoint-both" SLP_CLAUDE_BASE_URL=https://gateway.example.com SLP_CLAUDE_API_KEY=a \
     SLP_CLAUDE_AUTH_TOKEN=b "$REPO_ROOT/install.sh" --paseo-only --no-reload >/dev/null 2>&1; then
   ok "install.sh still accepts SLP_CLAUDE_API_KEY as an alias and refuses two different keys"
@@ -1476,18 +1476,33 @@ jq -e --arg room "$RV" '.sandbox as $s | .permissions as $p
     | $s.enabled == true and $s.allowUnsandboxedCommands == false and $s.failIfUnavailable == true
     and $s.autoAllowBashIfSandboxed == true and $s.network.allowedDomains == [] and ($s | has("excludedCommands") | not)
     and ($s.filesystem.denyWrite | index($room | split("/.config/")[0]) != null)
-    and ($s.filesystem.allowWrite == [$room + "/state"])
+    and ($s.filesystem | has("allowWrite") | not)
+    and ($p.allow | index("Skill") != null and index("Grep") != null and index("Glob") != null and index("TaskStop") != null)
+    and ($p.allow | any(.[]; startswith("Edit(//")))
+    and ($p.deny | index("Read(/" + ($room | split("/.config/")[0]) + "/.paseo/config.json)") != null)
+    and ($p.deny | index("Read(/" + ($room | split("/.config/")[0]) + "/.claude.json)") != null)
+    and (has("hooks") | not) and (has("statusLine") | not) and (.enabledPlugins == {})
     and ($s.credentials.files | all(.mode == "deny") and length >= 5)
     and ($s.credentials.envVars | map(.name) | index("GH_TOKEN") != null)
     and ($p.deny | index("WebFetch") != null and index("WebSearch") != null and index("Bash(git push:*)") != null
          and any(.[]; startswith("Edit(//")))
-    and ($p.allow | any(.[]; test("^(Bash|Edit|Write)")) | not)
+    and ($p.allow | any(.[]; test("^Bash")) | not)
     and $p.disableBypassPermissionsMode == "disable" and $p.defaultMode == "default"
-    and .outputStyle == "slp-reviewer" and .sandbox.filesystem.allowWrite != null' \
+    and .outputStyle == "slp-reviewer"' \
   "$RV/claude-reviewer/settings.json" >/dev/null || { RV_OK=0; echo "  rendered claude-reviewer settings lack the sandbox/deny keys"; }
 # The user's looser settings must not survive in the reviewer runtime (deny/sandbox win, allow rules and excludedCommands dropped).
 jq -e '.permissions.allow | index("Bash(rm:*)") == null and index("Edit(/**)") == null' "$RV/claude-reviewer/settings.json" >/dev/null \
   || { RV_OK=0; echo "  user Bash/Edit allow rules survived in the reviewer settings"; }
+[ "$(stat -c %a "$RV/claude-reviewer/settings.json" 2>/dev/null || stat -f %Lp "$RV/claude-reviewer/settings.json")" = "600" ] || { RV_OK=0; echo "  reviewer settings.json is not mode 600"; }
+# A user settings file with hooks, an mcp allow rule, secrets in env and a relative SLP_REVIEWER_DENY_WRITE entry.
+RVH="$TMP/home-rv"; rm -rf "$RVH"; mkdir -p "$RVH/.claude"
+printf '{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"x"}]}]},"statusLine":{"type":"command","command":"y"},"permissions":{"allow":["mcp__evil__write","Bash(rm:*)"]},"env":{"GH_TOKEN":"t","AWS_SECRET_ACCESS_KEY":"s","LANG":"C"}}\n' > "$RVH/.claude/settings.json"
+if HOME="$RVH" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1 \
+  && jq -e '(has("hooks") | not) and (has("statusLine") | not) and (.env == {"LANG": "C"})
+      and (.permissions.allow | index("mcp__evil__write") == null and index("Bash(rm:*)") == null and index("mcp__paseo__send_agent_prompt") != null)' \
+    "$RVH/.config/slp-room/claude-reviewer/settings.json" >/dev/null \
+  && jq -e 'has("hooks")' "$RVH/.config/slp-room/claude-peer/settings.json" >/dev/null; then :; else RV_OK=0; echo "  reviewer runtime kept inherited hooks/statusLine/env/mcp allows, or the Peer runtime lost them"; fi
+if HOME="$RVH" SLP_REVIEWER_DENY_WRITE="relative/path" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1; then RV_OK=0; echo "  a relative SLP_REVIEWER_DENY_WRITE entry was accepted"; fi
 grep -q 'Room role: Peer' "$RV/claude-reviewer/output-styles/slp-reviewer.md" || { RV_OK=0; echo "  reviewer output style lacks the Peer role"; }
 jq -e '.agents.providers as $p
     | $p["claude-reviewer"].env.CLAUDE_CONFIG_DIR == $room + "/claude-reviewer"
@@ -1506,9 +1521,10 @@ CHECK="$RV/bin/slp-reviewer-check"
 { [ -x "$CHECK" ] && [ "$(stat -c %a "$CHECK" 2>/dev/null || stat -f %Lp "$CHECK")" = "755" ] && cmp -s paseo/bin/slp-reviewer-check "$CHECK"; } \
   || { RV_OK=0; echo "  slp-reviewer-check is not installed 0755"; }
 DRY_OUT="$(PATH="/usr/bin:/bin" "$CHECK" --dry-run 2>&1)" || { RV_OK=0; echo "  slp-reviewer-check --dry-run failed"; }
-for id in tool redirect script symlink tmp push net cred-files cred-env cx-redirect cx-tool cx-push cx-cred-env; do
+for id in tool redirect script symlink tmp push net tcp gh cred-files cred-env journal no-prompt repo-settings cx-redirect cx-tool cx-push cx-tcp cx-cred-env; do
   grep -q "PLAN [a-z]* $id " <<< "$DRY_OUT" || { RV_OK=0; echo "  dry-run plan lacks row $id"; }
 done
+SELF_OUT="$(PATH="/usr/bin:/bin:$PATH" "$CHECK" --self-test 2>&1)" || { RV_OK=0; echo "  slp-reviewer-check --self-test failed: $(grep FAIL <<< "$SELF_OUT" | head -3)"; }
 grep -qE '^(PASS|FAIL|ENFORCED)' <<< "$DRY_OUT" && { RV_OK=0; echo "  dry-run printed a result line"; }
 if [ "$RV_OK" = 1 ]; then
   ok "reviewer seats: rendered claude-reviewer sandbox/deny keys, codex-reviewer read-only launcher, Peer spawner denies intact, slp-reviewer-check installed 0755 and --dry-run lists every probe (static only)"
