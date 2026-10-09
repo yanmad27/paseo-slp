@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.9.0](https://github.com/yanmad27/paseo-slp/compare/v2.8.0...v2.9.0) (2026-10-09)
+
+
+### Features
+
+* Lead and Peers record coordination events with slp-journal ([#67](https://github.com/yanmad27/paseo-slp/issues/67)) ([0b17eeb](https://github.com/yanmad27/paseo-slp/commit/0b17eeba7a9508b664f3259c9d53cfd44cf45b3c))
+* reviewer seats on restricted providers with a probing self-check ([#68](https://github.com/yanmad27/paseo-slp/issues/68)) ([01d332b](https://github.com/yanmad27/paseo-slp/commit/01d332b69d1c5dd8483cb07ed54aa51edcf8d0e4))
+* slp-journal helper with versioned room message envelope and durable journal ([#64](https://github.com/yanmad27/paseo-slp/issues/64)) ([beb31ff](https://github.com/yanmad27/paseo-slp/commit/beb31ffbda1d66f5898063c33575d56bf887699f))
+
+
+### Bug Fixes
+
+* behaviour evals load the supervisor role and guard that they do ([#66](https://github.com/yanmad27/paseo-slp/issues/66)) ([c30f414](https://github.com/yanmad27/paseo-slp/commit/c30f4145d59be8e0c1d61d14bdf82c40a0b40fce))
+* make every eval grader loadable and compilable under claude plugin eval ([#65](https://github.com/yanmad27/paseo-slp/issues/65)) ([4b2a5a9](https://github.com/yanmad27/paseo-slp/commit/4b2a5a97000cfd077cdaae9a3d238c9985327fd9))
+* Supervisor writes the 🕒 state as visible text before every slp-wait re-arm ([#62](https://github.com/yanmad27/paseo-slp/issues/62)) ([d935943](https://github.com/yanmad27/paseo-slp/commit/d9359431ddd2604572fd9b60070d4105f1a33ba3))
+
 ## [2.8.0](https://github.com/yanmad27/paseo-slp/compare/v2.7.0...v2.8.0) (2026-10-09)
 
 
