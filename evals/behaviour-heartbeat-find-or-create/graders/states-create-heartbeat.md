@@ -1,4 +1,4 @@
 ---
 type: regex
-pattern: '(?is)create_heartbeat.{0,200}supervisor: room'
+pattern: '[cC][rR][eE][aA][tT][eE]_[hH][eE][aA][rR][tT][bB][eE][aA][tT][\s\S]{0,200}[sS][uU][pP][eE][rR][vV][iI][sS][oO][rR]: [rR][oO][oO][mM]'
 ---

@@ -1,4 +1,4 @@
 ---
 type: regex
-pattern: '(?is)\A(?!\s*DONE\b)'
+pattern: '(?<![\s\S])(?!\s*[dD][oO][nN][eE]\b)'
 ---

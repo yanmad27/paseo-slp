@@ -1,4 +1,4 @@
 ---
 type: regex
-pattern: '(?is)\A(?!\s*`?no change`?\s*\Z).+'
+pattern: '(?<![\s\S])(?!\s*`?[nN][oO] [cC][hH][aA][nN][gG][eE]`?\s*(?![\s\S]))[\s\S]+'
 ---

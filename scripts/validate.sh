@@ -1151,6 +1151,51 @@ else
   fail "scripts/test-room-state-graders.py failed: a 🕒 grader regex no longer fits the emoji-tree form"
 fi
 
+cat > "$TMP/check_graders.py" <<'PY'
+import glob, json, sys
+import yaml
+
+regexes, bad = [], []
+for path in sorted(glob.glob("evals/*/graders/*.md")):
+    text = open(path, encoding="utf-8").read()
+    # The runner ends the frontmatter at the first '---' after the opening one,
+    # even inside a quoted scalar.
+    end = text.find("---", 3) if text.startswith("---") else -1
+    try:
+        if end < 0:
+            raise ValueError("no closing ---")
+        meta = yaml.safe_load(text[3:end])
+        if not isinstance(meta, dict):
+            raise ValueError("frontmatter is not a mapping")
+    except Exception as e:
+        bad.append(f"{path}: unparseable frontmatter: {str(e).splitlines()[0]}")
+        continue
+    for field in ("pattern", "input_match"):
+        if field in meta:
+            regexes.append({"path": path, "field": field, "source": str(meta[field])})
+json.dump({"bad": bad, "regexes": regexes}, sys.stdout)
+PY
+cat > "$TMP/check_graders.js" <<'JS'
+const { bad, regexes } = JSON.parse(require("fs").readFileSync(0, "utf8"));
+for (const { path, field, source } of regexes) {
+  try {
+    new RegExp(source);
+  } catch (e) {
+    bad.push(`${path}: ${field} does not compile: ${e.message}`);
+    continue;
+  }
+  if (/\\[AZ]/.test(source)) bad.push(`${path}: ${field} uses \\A or \\Z, which JS reads as a literal letter`);
+}
+bad.forEach((b) => console.log(b));
+process.exit(bad.length ? 1 : 0);
+JS
+if python3 "$TMP/check_graders.py" | node "$TMP/check_graders.js" >"$TMP/graders-compile.out" 2>&1; then
+  ok "every eval grader's frontmatter parses and its pattern/input_match compiles as a JS RegExp"
+else
+  head -20 "$TMP/graders-compile.out"
+  fail "an eval grader has unparseable frontmatter (a '---' inside it ends it early) or a regex JS rejects (inline (?s)/(?i) flags, \\A, \\Z)"
+fi
+
 for phrase in 'skipped, not queued' 'record a skipped slot twice' 'the next slot usually resumes it'; do
   if grep -qF -- "$phrase" README.md; then
     ok "README.md states the heartbeat-restart limit: '$phrase'"

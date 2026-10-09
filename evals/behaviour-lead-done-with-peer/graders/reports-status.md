@@ -1,4 +1,4 @@
 ---
 type: regex
-pattern: '\A\s*STATUS\b'
+pattern: '(?<![\s\S])\s*STATUS\b'
 ---
