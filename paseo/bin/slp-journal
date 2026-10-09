@@ -7,6 +7,7 @@ Exit codes: 0 ok, 2 usage, 3 rejected (reason in JSON on stdout), 4 journal corr
 """
 import argparse
 import datetime
+import errno
 import fcntl
 import hashlib
 import json
@@ -328,6 +329,9 @@ def fsync_dir(d):
     fd = os.open(d, os.O_RDONLY)
     try:
         os.fsync(fd)
+    except OSError as e:
+        if e.errno not in (errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP):
+            raise
     finally:
         os.close(fd)
 
@@ -360,13 +364,11 @@ def make_dirs_durable(d):
 
 
 def open_new_or_existing(path, flags):
-    """Open read/write, creating 0600; fsync the parent directory when this call created the file."""
+    """Open read/write, creating 0600 if missing (directory durability: see Journal.__enter__)."""
     try:
-        fd = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+        return os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600), True
     except FileExistsError:
         return os.open(path, flags), False
-    fsync_ancestors(os.path.dirname(path))
-    return fd, True
 
 
 class Journal:
@@ -390,6 +392,9 @@ class Journal:
             fcntl.flock(self.lfd, fcntl.LOCK_EX if self.write else fcntl.LOCK_SH)
             if self.write:
                 self.fd, _ = open_new_or_existing(self.path, os.O_RDWR)
+                # Whoever created the files, their directory entries are made durable under our
+                # lock before this operation can acknowledge a write.
+                fsync_ancestors(d)
             else:
                 try:
                     self.fd = os.open(self.path, os.O_RDONLY)

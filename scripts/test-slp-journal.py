@@ -447,6 +447,80 @@ class ReviewRepairTests(Base):
         for d in (newB, newA, existing, self.dir, "/"):
             self.assertIn(d, synced)
 
+    def test_every_write_syncs_dirs_even_if_files_preexist(self):
+        import importlib.machinery, importlib.util
+        loader = importlib.machinery.SourceFileLoader("slpj3", CLI)
+        m = importlib.util.module_from_spec(importlib.util.spec_from_loader("slpj3", loader))
+        loader.exec_module(m)
+        d = os.path.join(self.dir, "existing", "newA", "newB")
+        os.makedirs(d, mode=0o700)
+        jp = os.path.join(d, "journal.jsonl")
+        for f in (jp, jp + ".lock"):  # created by a paused writer: no syncs
+            os.close(os.open(f, os.O_CREAT | os.O_WRONLY, 0o600))
+        synced = []
+        real = os.fsync
+
+        def spy(fd):
+            if os.fstat(fd).st_mode & 0o170000 == 0o040000:
+                synced.append(self._fd_path(fd))
+            return real(fd)
+        m.os.fsync = spy
+        try:
+            with m.Journal(jp, write=True) as j:
+                j.append_message(env("m1", "QUESTION"))
+                self.assertIn(d, synced)
+            synced.clear()
+            with m.Journal(jp, write=True) as j:
+                j.deliver("m1", "delivered")
+            self.assertIn(d, synced)
+            synced.clear()
+            with m.Journal(jp, write=False) as j:
+                pass
+            self.assertEqual(synced, [])
+        finally:
+            m.os.fsync = real
+
+    def test_every_write_syncs_full_chain(self):
+        import importlib.machinery, importlib.util
+        loader = importlib.machinery.SourceFileLoader("slpj4", CLI)
+        m = importlib.util.module_from_spec(importlib.util.spec_from_loader("slpj4", loader))
+        loader.exec_module(m)
+        d = os.path.join(self.dir, "existing", "newA", "newB")
+        os.makedirs(d, mode=0o700)
+        jp = os.path.join(d, "journal.jsonl")
+        for f in (jp, jp + ".lock"):
+            os.close(os.open(f, os.O_CREAT | os.O_WRONLY, 0o600))
+        synced = []
+        real = os.fsync
+
+        def spy(fd):
+            if os.fstat(fd).st_mode & 0o170000 == 0o040000:
+                synced.append(self._fd_path(fd))
+            return real(fd)
+        m.os.fsync = spy
+        try:
+            with m.Journal(jp, write=True) as j:
+                j.append_message(env("m1", "QUESTION"))
+        finally:
+            m.os.fsync = real
+        for x in (d, os.path.dirname(d), os.path.join(self.dir, "existing"), self.dir, "/"):
+            self.assertIn(x, synced)
+
+    def test_dir_fsync_unsupported_is_skipped_other_errors_propagate(self):
+        import errno, importlib.machinery, importlib.util
+        loader = importlib.machinery.SourceFileLoader("slpj5", CLI)
+        m = importlib.util.module_from_spec(importlib.util.spec_from_loader("slpj5", loader))
+        loader.exec_module(m)
+        real = os.fsync
+        try:
+            m.os.fsync = lambda fd: (_ for _ in ()).throw(OSError(errno.EINVAL, "x"))
+            m.fsync_dir(self.dir)
+            m.os.fsync = lambda fd: (_ for _ in ()).throw(OSError(errno.EIO, "x"))
+            with self.assertRaises(OSError):
+                m.fsync_dir(self.dir)
+        finally:
+            m.os.fsync = real
+
     @staticmethod
     def _fd_path(fd):
         import fcntl

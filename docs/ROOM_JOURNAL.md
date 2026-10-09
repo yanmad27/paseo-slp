@@ -87,8 +87,10 @@ The full lifecycle state machine is out of scope here.
   can be taken in a temp dir.
 - Effectively-once processing comes from dedup plus idempotent handlers; this is not exactly-once.
 - Durability assumes a local filesystem that honours `fsync`. Each append is fsynced; when the
-  journal or lock file is created, the journal's directory and every ancestor up to the filesystem root are fsynced by the creating
-  process, without relying on another writer; missing directory levels are
+  journal or lock file is created, every mutating operation fsyncs the journal's directory and every ancestor up to the filesystem
+  root under the lock before acknowledging a write (a few directory fsyncs per write; reads do not),
+  so durability never depends on another writer having finished initialization; an ancestor whose
+  fsync returns EINVAL/ENOTSUP is skipped, any other error propagates; missing directory levels are
   created one at a time (0700) and each new directory's containing directory (the pre-existing
   ancestor included) is fsynced. The test checks that directory fsyncs are issued, not that data survives
   power loss; a disk that lies about fsync is outside what is tested.
