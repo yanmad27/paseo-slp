@@ -1,4 +1,4 @@
 ---
 type: regex
-pattern: '(?is)\A(?!.*\b(?:i(?:\x27ll| will| am going to)|let me|going to|now)\b(?:(?!\bnot\b|n\x27t|\bnever\b|\bno\b)[^.\n])*create_heartbeat)(?!.*\bcreate_heartbeat\s*[({])'
+pattern: '(?<![\s\S])(?![\s\S]*\b(?:[iI](?:\x27[lL][lL]| [wW][iI][lL][lL]| [aA][mM] [gG][oO][iI][nN][gG] [tT][oO])|[lL][eE][tT] [mM][eE]|[gG][oO][iI][nN][gG] [tT][oO]|[nN][oO][wW])\b(?:(?!\b[nN][oO][tT]\b|[nN]\x27[tT]|\b[nN][eE][vV][eE][rR]\b|\b[nN][oO]\b)[^.\n])*[cC][rR][eE][aA][tT][eE]_[hH][eE][aA][rR][tT][bB][eE][aA][tT])(?![\s\S]*\b[cC][rR][eE][aA][tT][eE]_[hH][eE][aA][rR][tT][bB][eE][aA][tT]\s*[({])'
 ---

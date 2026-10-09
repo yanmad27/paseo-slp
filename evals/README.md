@@ -1,7 +1,8 @@
 # supervisor eval suite
 
-Run: `claude plugin eval . --trust-plugin --allow-tools Edit Write`
-(Edit/Write must be granted so the `no-self-edit` case's checks are non-vacuous.)
+Run: `claude plugin eval . --trust-plugin --allow-tools Bash Edit Write`
+(Bash, Edit and Write must be granted so the Bash-counting graders and the
+`no-self-edit` case's checks are non-vacuous.)
 
 Cases:
 

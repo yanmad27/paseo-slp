@@ -239,7 +239,7 @@ for rel in DOCS:
         check("consistency", {m for _, m in rows} == {"🤖", "🦾"}, f"{rel} exemplifies both 🤖 and 🦾 rows")
         check("consistency", TITLE + SEPARATOR + "🤖" in text, f"{rel} shows the header, SEPARATOR, then a 🤖 row")
 
-SEP_PAT = TITLE + r"[ \t]*" + SEPARATOR.replace("\n", r"\n") + "🤖 "
+SEP_PAT = TITLE + r"[ \t]*" + SEPARATOR.replace(SEP_LINE, "-{%d}" % len(SEP_LINE)).replace("\n", r"\n") + "🤖 "
 for key, rel in G.items():
     text = (ROOT / rel).read_text(encoding="utf-8")
     check_file(rel, text)

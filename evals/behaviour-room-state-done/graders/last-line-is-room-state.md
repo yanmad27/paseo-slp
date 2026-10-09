@@ -1,4 +1,4 @@
 ---
 type: regex
-pattern: '(?s)\n(?:✅ Done: )[^\n]+\s*\Z'
+pattern: '\n(?:✅ Done: )[^\n]+\s*(?![\s\S])'
 ---
