@@ -280,12 +280,15 @@ def jmatch(sub, command):
 
 for sub in JG:
     H = "/opt/slp-room/bin/slp-journal"
-    pos = [f"{H} {sub} t1 --to p", f"cd /r && {H} {sub} t1", f"x; {H} {sub} t1", f"x || {H} {sub} t1",
-           f"x | {H} {sub} t1", f'"{H}" {sub} t1', f"'{H}' {sub} t1", f'"/opt/my room/bin/slp-journal" {sub} t1',
+    pos = [f"{H} {sub} t1 --to p", f'"{H}" {sub} t1', f"'{H}' {sub} t1", f'"/opt/my room/bin/slp-journal" {sub} t1',
            f"SLP_JOURNAL=/j PASEO_AGENT_ID=a {H} {sub} t1", f"slp-journal {sub} t1", f"{H} --journal /j {sub} t1",
-           f"@@SLP_JOURNAL@@ {sub} t1", f"a\n{H} {sub} t1"]
-    neg = [f"echo slp-journal {sub}", f"echo {H} {sub} t1", f"cat {H}-notes {sub}", f"{H} state",
-           f"ls /opt/slp-room/bin/slp-journal-{sub}", f'echo "{H} {sub}"', f"grep slp-journal {sub} f"]
+           f"@@SLP_JOURNAL@@ {sub} t1", f"  {H} {sub} t1"]
+    # Not counted: chained after another command (the prompts say the journal call is its own Bash call),
+    # or the helper only as an argument / inside a quoted string.
+    neg = [f"cd /r && {H} {sub} t1", f"x; {H} {sub} t1", f"x || {H} {sub} t1", f"x | {H} {sub} t1",
+           f"echo '; {H} {sub} t'", f'printf "&& {H} {sub}"', f"echo slp-journal {sub}", f"echo {H} {sub} t1",
+           f"cat {H}-notes {sub}", f"{H} state", f"ls /opt/slp-room/bin/slp-journal-{sub}", f'echo "{H} {sub}"',
+           f"grep slp-journal {sub} f"]
     for c in pos:
         check("journal", jmatch(sub, c), f"{sub}: positive {c!r}")
     for c in neg:

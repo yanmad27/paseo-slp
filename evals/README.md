@@ -71,9 +71,12 @@ Cases:
   `❓ Waiting on you:` line.
 - `behaviour-journal-lead-brief`, `behaviour-journal-lead-accept`: a Lead that
   just got `create_agent`'s result, or has a passed review to act on, runs
-  `slp-journal brief` / `slp-journal accept` (Bash; matched on the command name
-  so the helper path does not matter, and on the raw `@@SLP_JOURNAL@@` token
-  the plugin-copy role file still carries).
+  `slp-journal brief` / `slp-journal accept` (Bash; the helper must be the
+  command word at the START of the Bash command, optionally after `NAME=value`
+  assignments and with a quoted or bare path, so its path does not matter; the
+  raw `@@SLP_JOURNAL@@` token the plugin-copy role file carries also counts).
+  The prompts say each journal call is its own Bash call, so one chained after
+  another command (`cd x && slp-journal …`) is not counted.
 - `behaviour-journal-peer-candidate`: a Peer that finished writable work runs
   `slp-journal candidate`, and its final message opens with `CANDIDATE`. The
   ordering (journal call before the message) is not gradable here; the
