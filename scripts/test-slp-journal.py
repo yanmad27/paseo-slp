@@ -423,6 +423,30 @@ class ReviewRepairTests(Base):
             self.assertIn(d, synced)
         self.assertEqual(oct(os.stat(os.path.join(existing, "newA")).st_mode & 0o777), "0o700")
 
+    def test_first_append_syncs_ancestors_of_unsynced_dirs(self):
+        import importlib.machinery, importlib.util
+        loader = importlib.machinery.SourceFileLoader("slpj2", CLI)
+        m = importlib.util.module_from_spec(importlib.util.spec_from_loader("slpj2", loader))
+        loader.exec_module(m)
+        existing = os.path.join(self.dir, "existing")
+        newA, newB = os.path.join(existing, "newA"), os.path.join(existing, "newA", "newB")
+        os.makedirs(newB, mode=0o700)  # a paused writer made these but has not fsynced them
+        synced = []
+        real = os.fsync
+
+        def spy(fd):
+            if os.fstat(fd).st_mode & 0o170000 == 0o040000:
+                synced.append(self._fd_path(fd))
+            return real(fd)
+        m.os.fsync = spy
+        try:
+            with m.Journal(os.path.join(newB, "journal.jsonl"), write=True) as j:
+                j.append_message(env("m1", "QUESTION"))
+        finally:
+            m.os.fsync = real
+        for d in (newB, newA, existing, self.dir, "/"):
+            self.assertIn(d, synced)
+
     @staticmethod
     def _fd_path(fd):
         import fcntl

@@ -332,6 +332,16 @@ def fsync_dir(d):
         os.close(fd)
 
 
+def fsync_ancestors(d):
+    """fsync d and every ancestor up to the filesystem root, independent of any other writer."""
+    while True:
+        fsync_dir(d)
+        parent = os.path.dirname(d)
+        if parent == d:
+            return
+        d = parent
+
+
 def make_dirs_durable(d):
     """Create missing levels one at a time (0700), fsyncing each new directory's containing directory."""
     missing = []
@@ -355,7 +365,7 @@ def open_new_or_existing(path, flags):
         fd = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         return os.open(path, flags), False
-    fsync_dir(os.path.dirname(path))
+    fsync_ancestors(os.path.dirname(path))
     return fd, True
 
 
