@@ -261,17 +261,16 @@ Record each event beside its signal with `@@SLP_JOURNAL@@ <line below>`: one
 Bash call, never polled or read back; a failed call never blocks the signal.
 ```
 brief T --to PEER --room "$PASEO_AGENT_ID" --root DIR --path P...
-brief T --to PEER --review --cid C
+brief T --to PEER --room "$PASEO_AGENT_ID" --review --cid C
 accept T --cid C [--waive WHY]
 reject T --cid C
 send T ANSWER|HOLD|"REVISED BRIEF"|DEFER [--cause ID]
 control revoke|cancel T | transfer T --to X
 done-check LEAD [--running ID]...
 ```
-`brief` follows `create_agent` (`--room` on the first only); `T` is the
-task id, `C` the `cid=` of the Peer's `candidate`. Run
-`done-check` once before `DONE`. A replacement Lead reads `state` once, then
-records `control lead --from OLD --to NEW`.
+`brief` follows `create_agent`; `T` is the task id, `C` the `cid=` of the
+Peer's `candidate`. Run `done-check` once before `DONE`. A replacement Lead
+reads `state` once, then records `control lead --from OLD --to NEW --room OLD`.
 
 # HANDLING PEER RESPONSES — CLOSE EVERY LOOP
 Peers reach you two ways: their turn-end message (your finish
@@ -477,12 +476,12 @@ gets one reviewer per chunk.
 Never end a turn idle on `STATUS: waiting on CI` with nothing running: the
 Supervisor would have nothing to wait on and its spinner stops. Per
 PROTOCOL.md (External jobs), yours:
-- Launch a "Cheap peer" watch Peer; its brief gives no write scope ("do not
-  modify files; run only the watch") and has the PR or run ID, the commit,
-  and the command: one foreground `gh pr checks <pr> --watch --fail-fast
-  --interval 30` or `gh run watch <id> --exit-status --compact --interval
-  30`, Bash `timeout` 600000. Say in the brief: at most 7 watch calls in
-  total, and the cap, "no checks reported", and early-backgrounding rules of
+- Launch a "Cheap peer" watch Peer; its brief gives no write scope
+  ("do not modify files; run only the watch") and has the PR or run ID, the
+  commit, and the command: one foreground `gh pr checks <pr> --watch
+  --fail-fast --interval 30` or `gh run watch <id> --exit-status --compact
+  --interval 30`, Bash `timeout` 600000. Say in the brief: at most 7 watch calls in total,
+  and the cap, "no checks reported", and early-backgrounding rules of
   PROTOCOL.md (never two watches at once, never `sleep`, a loop, or repeated
   status calls); judge by exit code plus the final table; no logs; end with
   `REVIEW`. Then report `STATUS: waiting on CI` and end your turn; a running

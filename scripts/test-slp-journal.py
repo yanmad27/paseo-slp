@@ -3,6 +3,8 @@
 import hashlib
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -1174,6 +1176,107 @@ class UniformSignalTrackingTests(StateMachineBase):
         self.assertEqual(len(self.tstate()["openSignals"]), 2)
         self.sok("reject", "t1", "lead", "--cid", c2)
         self.assertEqual(self.tstate()["openSignals"], {})
+
+
+RENDERED = os.environ.get("SLP_RENDERED_ROOM")
+
+
+@unittest.skipUnless(RENDERED, "SLP_RENDERED_ROOM (an install's slp-room dir) not set")
+class RenderedPromptTests(unittest.TestCase):
+    """Runs the slp-journal commands the RENDERED Lead and Peer prompts tell seats to run."""
+
+    @staticmethod
+    def _read(name):
+        with open(os.path.join(RENDERED, name)) as f:
+            return f.read()
+
+    @staticmethod
+    def _bind(template, vals, opts=(), alt=None):
+        """Turn a prompt command template into argv: choose alternatives, fill placeholders."""
+        for flag in re.findall(r"\[(--[\w-]+)[^\]]*\]", template):
+            template = re.sub(r"\[" + re.escape(flag) + r"[^\]]*\]",
+                              (flag + " " + vals["opt:" + flag]) if flag in opts else "", template, count=1)
+        template = re.sub(r"(?:\"[^\"]+\"|[A-Za-z_]+)(?:\|(?:\"[^\"]+\"|[A-Za-z_]+))+", lambda m: alt, template) if alt else template
+        out = []
+        for tok in shlex.split(template):
+            if tok == "...":
+                continue
+            if tok == "P...":
+                out += vals["P"]
+            else:
+                out.append(vals.get(tok, tok))
+        return out
+
+    def _call(self, jpath, who, path, argv):
+        e = dict(os.environ, SLP_JOURNAL=jpath, PASEO_AGENT_ID=who)
+        e.pop("SLP_ROOM", None)
+        p = subprocess.run([path] + argv, capture_output=True, text=True, env=e)
+        return p.returncode, (p.stdout + p.stderr).strip()
+
+    def test_prompt_commands_run_a_cycle_and_survive_lead_replacement(self):
+        lead, peer = self._read("lead.md"), self._read("peer.md")
+        self.assertNotIn("@@SLP_JOURNAL@@", lead + peer)
+        m = re.search(r"with `(\S+) <line below>`", lead)
+        self.assertTrue(m, "Lead prompt does not name the helper")
+        jbin = m.group(1)
+        self.assertEqual(jbin, os.path.join(RENDERED, "bin", "slp-journal"))
+        self.assertTrue(os.access(jbin, os.X_OK))
+        block = re.search(r"<line below>`.*?```\n(.*?)```", lead, re.S).group(1).strip().split("\n")
+        cmds = {}
+        for line in block:
+            for part in line.split(" | "):
+                part = part.strip()
+                if part.startswith("brief ") and "--review" in part:
+                    cmds["brief-review"] = part
+                elif part.startswith("brief "):
+                    cmds["brief"] = part
+                else:
+                    cmds[part.split()[0]] = part
+        self.assertEqual(set(cmds) - {"transfer"}, {"brief", "brief-review", "accept", "reject", "send", "control", "done-check"})
+        ctl = re.search(r"records `(control lead [^`]+)`", lead).group(1)
+        self.assertIn("`state`", lead)
+        pj = re.search(r"Journal:.*?one Bash call to `" + re.escape(jbin) + r"`:(.*?)\n- ", peer, re.S)
+        self.assertTrue(pj, "Peer prompt has no Journal rule naming the helper")
+        pcmds = {c.split()[0]: c for c in re.findall(r"`([a-z]+ T[^`]*)`", pj.group(1))}
+        self.assertEqual(set(pcmds), {"candidate", "review", "send"})
+
+        with tempfile.TemporaryDirectory() as d:
+            jp = os.path.join(d, "state", "journal.jsonl")
+            v = {"T": "tsk", "PEER": "peer-1", "DIR": "/repo", "P": ["src/a.py"], "B": "abc123",
+                 "SHA": "0123456789abcdef0123456789abcdef01234567", "$PASEO_AGENT_ID": "lead-1",
+                 "LEAD": "lead-1", "OLD": "lead-1", "NEW": "lead-2", "opt:--evidence": "ev1"}
+
+            def go(who, argv, ok=True):
+                rc, out = self._call(jp, who, jbin, argv)
+                self.assertEqual(rc == 0, ok, (argv, rc, out))
+                return out
+
+            go("lead-1", self._bind(cmds["brief"], v))
+            out = go("peer-1", self._bind(pcmds["candidate"], v, opts=("--evidence",)))
+            cid = re.search(r"cid=(\w+)", out).group(1)
+            v.update({"C": cid, "T": "tsk-rev", "PEER": "rev-1"})
+            go("lead-1", self._bind(cmds["brief-review"], v))
+            go("rev-1", self._bind(pcmds["review"], v))
+            v["T"] = "tsk"
+            go("lead-1", self._bind(cmds["accept"], v))
+            self.assertIn("clean", go("lead-1", self._bind(cmds["done-check"], v)))
+
+            v["T"], v["PEER"], v["P"], v["$PASEO_AGENT_ID"] = "tsk2", "peer-2", ["src/b.py"], "lead-2"
+            go("lead-2", self._bind(ctl, v))
+            st = json.loads(go("lead-2", ["state"]))
+            t = st["tasks"]["tsk"]
+            self.assertEqual((t["status"], t["owner"] or t["lastOwner"], t["writeScope"]["paths"], t["acceptedCandidate"]),
+                             ("ACCEPTED", "peer-1", ["src/a.py"], cid))
+            self.assertEqual(st["roomLeads"]["lead-1"], "lead-2")
+            go("lead-2", self._bind(cmds["brief"], v))
+            v["PEER"] = "peer-3"
+            out = go("lead-2", self._bind(cmds["brief"], v), ok=False)
+            self.assertIn("task-exists", out)
+            v["T"] = "tsk3"
+            self.assertIn("scope-conflict", go("lead-2", self._bind(cmds["brief"], v), ok=False))
+            v["T"] = "tsk2"
+            v["PEER"] = "peer-2"
+            go("peer-2", self._bind(pcmds["send"], v, alt="QUESTION"))
 
 
 if __name__ == "__main__":

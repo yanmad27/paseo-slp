@@ -115,9 +115,9 @@ End your final message with exactly one line: `RECAP: <what you did> →
 - Holding an external-job watch (CI, deploy; PROTOCOL.md, External jobs): one
   foreground `gh pr checks <pr> --watch --fail-fast --interval 30` /
   `gh run watch <id> --exit-status --compact --interval 30` with Bash
-  `timeout` 600000; judge by the exit code plus the final table. At most 7
-  watch calls in total, unless the brief sets another bound; never two at
-  once, never a loop, `sleep`, or repeated status calls. Returned or
+  `timeout` 600000; judge by the exit code plus the final table.
+  At most 7 watch calls in total, unless the brief sets another bound; never
+  two at once, never a loop, `sleep`, or repeated status calls. Returned or
   backgrounded at about the `timeout` with checks pending (the expected
   10-minute cap): stop the background task first (the background-task stop
   tool, `TaskStop`; `KillShell` in older builds; if it cannot be stopped,

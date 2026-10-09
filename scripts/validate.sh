@@ -1254,7 +1254,7 @@ done
 for f in "$ROOM/claude-lead/output-styles/slp-lead.md" "$ROOM/lead.md" "$ROOM/room/roles/lead.md"; do
   if grep -qF "$WAIT_PATH" "$f" || grep -qF '@@SLP_WAIT@@' "$f"; then RENDER_OK=0; echo "  $f names slp-wait"; fi
 done
-jevf_ref off skills/supervisor/roles/lead.md | cmp -s - "$ROOM/room/roles/lead.md" || { RENDER_OK=0; echo "  room/roles/lead.md is not the Jev-off copy"; }
+jevf_ref off skills/supervisor/roles/lead.md | sed "s|@@SLP_JOURNAL@@|$ROOM/bin/slp-journal|g" | cmp -s - "$ROOM/room/roles/lead.md" || { RENDER_OK=0; echo "  room/roles/lead.md is not the Jev-off copy"; }
 [ -x "$WAIT_PATH" ] || RENDER_OK=0
 if grep -rq '@@SLP_WAIT@@' "$ROOM" --include='*.md'; then RENDER_OK=0; echo "  a rendered file still has @@SLP_WAIT@@"; fi
 if [ "$RENDER_OK" = 1 ]; then
@@ -1277,6 +1277,69 @@ if [ "$BUDGET_OK" = 1 ]; then
   ok "rendered Supervisor, Lead and Peer prompts are within their byte budgets"
 else
   fail "a rendered prompt grew past its byte budget: tighten existing wording instead"
+fi
+
+# slp-journal wiring: the Lead and Peer prompts name the installed helper by absolute path (token
+# rendered like @@SLP_WAIT@@), the Supervisor prompt gets no journal instructions, install.sh
+# creates only the 0700 state/ directory (never a journal), the Lead and Peer seats get SLP_JOURNAL
+# in their provider env and the Codex launcher, and no deny rule blocks the helper.
+JOURNAL_PATH="$ROOM/bin/slp-journal"
+JOURNAL_FILE="$ROOM/state/journal.jsonl"
+JW_OK=1
+for f in "$ROOM/lead.md" "$ROOM/claude-lead/output-styles/slp-lead.md" "$ROOM/room/roles/lead.md" \
+         "$ROOM/peer.md" "$ROOM/claude-peer/output-styles/slp-peer.md" "$ROOM/room/roles/peer.md"; do
+  grep -qF "$JOURNAL_PATH" "$f" || { JW_OK=0; echo "  $f does not name $JOURNAL_PATH"; }
+done
+for f in "$ROOM/supervisor.md" "$ROOM/claude-supervisor/output-styles/slp-supervisor.md"; do
+  if grep -qF "$JOURNAL_PATH" "$f" || grep -qF 'SLP_JOURNAL' "$f"; then JW_OK=0; echo "  $f carries journal instructions"; fi
+done
+grep -q 'slp-journal' "$ROOM_DIR/SKILL.md" && { JW_OK=0; echo "  SKILL.md mentions slp-journal"; }
+grep -rq '@@SLP_JOURNAL@@' "$ROOM" --include='*.md' && { JW_OK=0; echo "  a rendered file still has @@SLP_JOURNAL@@"; }
+[ -x "$JOURNAL_PATH" ] || { JW_OK=0; echo "  $JOURNAL_PATH is not executable"; }
+[ "$(stat -c %a "$ROOM/state" 2>/dev/null || stat -f %Lp "$ROOM/state")" = "700" ] || { JW_OK=0; echo "  state/ is not 0700"; }
+[ ! -e "$JOURNAL_FILE" ] || { JW_OK=0; echo "  install.sh created the journal"; }
+jq -e --arg j "$JOURNAL_FILE" '.agents.providers as $p
+    | $p["claude-lead"].env.SLP_JOURNAL == $j and $p["claude-peer"].env.SLP_JOURNAL == $j
+      and ($p["claude-supervisor"].env.SLP_JOURNAL // null) == null' "$RENDER_HOME/.paseo/config.json" >/dev/null \
+  || { JW_OK=0; echo "  provider env SLP_JOURNAL wrong"; }
+grep -qF "SLP_JOURNAL=\"$JOURNAL_FILE\"" "$ROOM/bin/codex-peer" || { JW_OK=0; echo "  codex-peer launcher lacks SLP_JOURNAL"; }
+grep -q 'slp-journal' "$ROOM/codex-peer/rules/room.rules" && { JW_OK=0; echo "  codex rules mention slp-journal"; }
+jq -e '[.agents.providers[].disallowedTools[]?] | map(select(test("slp-journal"))) == []' "$RENDER_HOME/.paseo/config.json" >/dev/null \
+  || { JW_OK=0; echo "  a provider denies slp-journal"; }
+if [ "$JW_OK" = 1 ]; then
+  ok "rendered Lead and Peer prompts name $JOURNAL_PATH; the Supervisor gets none; state/ is 0700 with no journal; SLP_JOURNAL is in the Lead/Peer provider env and the Codex launcher; nothing denies the helper"
+else
+  fail "slp-journal wiring wrong: token rendering, state dir, SLP_JOURNAL env, or a deny rule"
+fi
+
+JOURNAL_PHRASES=(
+  'roles/lead.md|recording coordination events with `slp-journal`'
+  'roles/lead.md|Task id: <short slug> (for slp-journal)'
+  'roles/lead.md|never polled or read back; a failed call never blocks the signal.'
+  'roles/lead.md|--room "$PASEO_AGENT_ID" --root DIR --path P...'
+  'roles/lead.md|Run `done-check` once before `DONE`'
+  'roles/lead.md|control lead --from OLD --to NEW --room OLD'
+  'roles/peer.md|record it with your'
+  'roles/peer.md|never blocks or replaces the signal; note it in residual risk.'
+  'PROTOCOL.md|`slp-journal` records coordination state'
+)
+for entry in "${JOURNAL_PHRASES[@]}"; do
+  file="$ROOM_DIR/${entry%%|*}"
+  phrase="${entry#*|}"
+  if grep -qF -- "$phrase" "$file"; then
+    ok "$file keeps the journal rule '$phrase'"
+  else
+    fail "$file missing journal rule '$phrase'"
+  fi
+done
+
+# Recovery proof: run the exact slp-journal commands the RENDERED prompts print through a
+# brief -> candidate -> review -> accept cycle, then a Lead replacement.
+if SLP_RENDERED_ROOM="$ROOM" python3 scripts/test-slp-journal.py RenderedPromptTests >"$TMP/journal-rendered.out" 2>&1; then
+  ok "the slp-journal commands in the rendered Lead/Peer prompts run a brief→candidate→review→accept cycle and survive a Lead replacement"
+else
+  tail -20 "$TMP/journal-rendered.out" >&2
+  fail "the commands in the rendered prompts do not run (scripts/test-slp-journal.py RenderedPromptTests)"
 fi
 
 # claude-lead's rendered denies are an exact set: main's baseline (Agent, Task, and the three

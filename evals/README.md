@@ -69,6 +69,15 @@ Cases:
   `delete_schedule`, or CLI schedule delete, the reply does not say it will
   create its own heartbeat (`create_heartbeat`), and it ends with a
   `❓ Waiting on you:` line.
+- `behaviour-journal-lead-brief`, `behaviour-journal-lead-accept`: a Lead that
+  just got `create_agent`'s result, or has a passed review to act on, runs
+  `slp-journal brief` / `slp-journal accept` (Bash; matched on the command name
+  so the helper path does not matter, and on the raw `@@SLP_JOURNAL@@` token
+  the plugin-copy role file still carries).
+- `behaviour-journal-peer-candidate`: a Peer that finished writable work runs
+  `slp-journal candidate`, and its final message opens with `CANDIDATE`. The
+  ordering (journal call before the message) is not gradable here; the
+  rendered-prompt test in `scripts/test-slp-journal.py` proves the commands run.
 
 The sandbox has no Paseo tools (and this suite builds no mocks of them), so
 the wait, room-state, DONE, heartbeat, and adoption cases can only exercise the

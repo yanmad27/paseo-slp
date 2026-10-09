@@ -1,8 +1,8 @@
 # Room journal (`slp-journal`)
 
 `slp-journal` is a stdlib-only Python (>= 3.9) helper that gives the room a versioned message
-envelope and an append-only, durable, concurrency-safe journal. It is a helper capability only:
-`PROTOCOL.md`, `SKILL.md` and the role prompts do not call it yet, and Paseo delivery is not wired
+envelope and an append-only, durable, concurrency-safe journal. The Lead and Peer role prompts call
+it (see "Wiring into the room"); `SKILL.md` (the Supervisor) does not, and Paseo delivery is not wired
 to it. Signal text is unchanged (compatibility: the envelope carries the existing tokens verbatim).
 "room-state" still means the Supervisor's 🕒 block; the journal is unrelated to it.
 
@@ -176,6 +176,20 @@ no-op on an implicitly processed message; an explicit `processing` is never over
 `control lead --from OLD --to NEW` (recorded by either; NEW must not own a held scope) moves the whole
 room's coordination. `state` then restores tasks, owners, scopes, candidates and open signals for NEW; OLD
 is `not-coordinator` from then on, and a BRIEF over a held scope is `scope-conflict` for anyone.
+
+## Wiring into the room
+
+`install.sh` creates `$ROOM_HOME/state/` (0700, never the journal or an existing one) and sets
+`SLP_JOURNAL=$ROOM_HOME/state/journal.jsonl` in the `claude-lead` and `claude-peer` provider env and in the
+`codex-peer` launcher. The Lead and Peer role prompts name the helper by the absolute path `install.sh` renders
+into their `@@SLP_JOURNAL@@` token. The Lead records BRIEF (after `create_agent`; `--room "$PASEO_AGENT_ID"` on
+every new task), its dispositions and control records, and runs `done-check` once before `DONE`; a Peer records
+its CANDIDATE, REVIEW and blocking signals with the task id from its brief, in the same turn, before the signal
+message. Each is one short command, never polled; the journal is read back only (`state`, once) by a replacement
+Lead, which then records `control lead --from OLD --to NEW --room OLD`. The signal text stays the authoritative
+message and a failed journal call never blocks it. The Supervisor has no journal duty.
+`validate.sh` pins each rendered prompt's byte budget and runs the commands extracted from the rendered prompts
+(`RenderedPromptTests` in `scripts/test-slp-journal.py`).
 
 ## CLI
 
