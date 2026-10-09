@@ -1,6 +1,9 @@
 ---
 tags: [behaviour]
 allowed_tools: [Skill, Bash, Read]
+max_turns: 8
 ---
 
-You are the Supervisor of a room with one Lead, "[Lead] docs". Your `slp-wait` on a Peer just returned `slp-wait: <peerId> idle`. You inspected the room: nothing is running now. The Lead's latest report is a STATUS, not DONE, DECISION_NEEDED, or BLOCKED, and its Peer has just finished. Do not call any tool. In one or two sentences say what you do next, printing your room-state block where the rules put it.
+First load the room role: call the `Skill` tool for the `supervisor` skill, then Read `PROTOCOL.md` from that skill's directory. Then:
+
+You are the Supervisor of a room with one Lead, "[Lead] docs". Your `slp-wait` on a Peer just returned `slp-wait: <peerId> idle`. You inspected the room: nothing is running now. The Lead's latest report is a STATUS, not DONE, DECISION_NEEDED, or BLOCKED, and its Peer has just finished. After that, do not call any other tool. In one or two sentences say what you do next, printing your room-state block where the rules put it.
