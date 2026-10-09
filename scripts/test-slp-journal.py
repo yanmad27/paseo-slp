@@ -238,15 +238,15 @@ class ConcurrencyAndCrashTests(Base):
         c2 = self.cand("c2", 2)
         self.review("rv2", c2)
         a = self.accept("acc", c2, "rv2")
-        self.ok(a)
-        for m, s in [("c1", "delivered"), ("c1", "processing"), ("acc", "delivered")]:
+        for m, s in [("c1", "delivered"), ("c1", "processing")]:
             self.assertEqual(run(["--journal", self.j, "deliver", m, s])[0], 0)
+        self.ok(a)
+        self.assertEqual(run(["--journal", self.j, "deliver", "acc", "delivered"])[0], 0)
         st = self.state()
         t = st["tasks"]["t1"]
         self.assertEqual((t["owner"], t["currentCandidate"], t["acceptedCandidate"], t["candidates"]), ("peer", c2, c2, [c1, c2]))
         self.assertEqual(st["needsReconcile"], ["c1"])
-        self.assertIn("acc", st["unprocessed"])
-        self.assertIn("b1", st["unprocessed"])
+        self.assertEqual(st["unprocessed"], [])
         self.assertEqual(self.ok(a)["duplicate"], True)
         self.assertEqual(len(self.state()["tasks"]["t1"]["acceptances"]), 1)
         self.assertEqual(self.state()["needsReconcile"], ["c1"])
@@ -906,21 +906,11 @@ class DoneCheckTests(StateMachineBase):
         self.assertIn("candidate-undisposed", self.done()[1])
         self.sok("send", "t1", "peer", "QUESTION", "--note", "q")
         self.assertIn("signal-undisposed", self.done()[1])
-        self.sok("accept", "t1", "lead", "--cid", c, "--waive", "ok")
-        bl = self.done()[1]
-        self.assertIn("signal-undisposed", bl)
-        self.assertNotIn("candidate-undisposed", bl)
-        self.assertNotIn("task-open", bl)
-        self.sok("send", "t1", "lead", "ANSWER", "--note", "a")
-        st = self.tstate()
-        for m in st["messages"]:
-            for s in ("delivered", "processing", "processed"):
-                self.assertEqual(run(["--journal", self.j, "deliver", m, s])[0], 0)
-            if m == sorted(st["messages"])[0]:
-                pass
+        self.sok("accept", "t1", "lead", "--cid", c, "--waive", "ok")  # disposition closes the QUESTION too
         rc, bl, r = self.done()
         self.assertEqual((rc, bl), (0, []), r)
         self.assertEqual(r.strip(), "ok done-check lead clean")
+        self.assertEqual(self.tstate()["unprocessed"], [])
         rc, bl, r = self.done("--running", "peer", "--permission-pending", "peer2")
         self.assertEqual((rc, bl), (3, ["agent-running", "permission-pending"]), r)
 
@@ -995,6 +985,76 @@ class ReplayTests(StateMachineBase):
         self.assertEqual(rc, 0, s2)
         self.assertEqual(s1, s2)
         self.assertEqual(self.tstate(now="2026-01-02T00:00:00Z"), s1)
+
+
+class ImplicitProcessingTests(StateMachineBase):
+    def test_review_cycle_passes_done_check_without_deliver(self):
+        self.brief_w()
+        c = self.cand_w()
+        self.review_task("rt1", c)
+        self.sok("review", "rt1", "rev")
+        self.assertEqual(self.done()[0], 3)
+        self.sok("accept", "t1", "lead", "--cid", c)
+        rc, bl, r = self.done()
+        self.assertEqual((rc, bl), (0, []), r)
+
+    def test_reject_repair_accept_cycle_passes_done_check_without_deliver(self):
+        self.brief_w()
+        c1 = self.cand_w(n=1)
+        self.sok("reject", "t1", "lead", "--cid", c1, "--note", "fix")
+        bl = self.done()[1]
+        self.assertIn("task-open", bl)
+        self.assertIn("message-unprocessed", bl)
+        c2 = self.cand_w(n=2)
+        self.sok("accept", "t1", "lead", "--cid", c2, "--waive", "trivial")
+        rc, bl, r = self.done()
+        self.assertEqual((rc, bl), (0, []), r)
+
+    def test_question_without_answer_blocks_and_cause_is_exact(self):
+        self.brief_w()
+        q1 = self.sok("send", "t1", "peer", "QUESTION", "--note", "one")["msg"]
+        q2 = self.sok("send", "t1", "peer", "QUESTION", "--note", "two")["msg"]
+        self.assertEqual(self.done()[1].count("signal-undisposed"), 2)
+        self.srej("unknown-cause", "send", "t1", "lead", "ANSWER", "--cause", "nope")
+        self.sok("send", "t1", "lead", "ANSWER", "--cause", q1)
+        m = self.tstate()["messages"]
+        self.assertEqual((m[q1]["state"], m[q2]["state"]), ("processed", "recorded"))
+        rc, bl, r = self.done()
+        self.assertEqual(bl.count("signal-undisposed"), 1, r)
+        self.assertIn(q2, r)
+        self.sok("send", "t1", "lead", "ANSWER")
+        self.assertNotIn("signal-undisposed", self.done()[1])
+
+    def test_lead_messages_on_closed_tasks_never_block_and_deliver_is_optional(self):
+        self.brief_w()
+        b = self.tstate()["messages"]
+        mid = next(iter(b))
+        self.sc("control", "cancel", "t1", "--as", "lead", "--room", "r1")
+        self.assertEqual(self.done(), (0, [], "ok done-check lead clean\n"))
+        rc, r = run(["--journal", self.j, "deliver", mid, "delivered"])
+        self.assertEqual(rc, 0, r)
+
+    def test_peer_signal_processes_lead_messages_and_control_processes_peer_signals(self):
+        self.brief_w()
+        self.sok("send", "t1", "peer", "QUESTION", "--note", "q")
+        self.sok("send", "t1", "lead", "ANSWER", "--note", "a")
+        self.sok("send", "t1", "peer", "QUESTION", "--note", "q2")
+        m = self.tstate()["messages"]
+        self.assertEqual([v["state"] for v in sorted(m.values(), key=lambda v: v["seq"])], ["processed"] * 3 + ["recorded"])
+        self.sc("control", "revoke", "t1", "--as", "lead", "--room", "r1")
+        self.assertEqual(self.tstate()["unprocessed"], [])
+
+    def test_as_defaults_to_paseo_agent_id(self):
+        self.brief_w()
+        e = dict(ENV, PASEO_AGENT_ID="peer")
+        p = subprocess.run([sys.executable, CLI, "--journal", self.j, "send", "t1", "QUESTION", "--note", "q"],
+                           capture_output=True, text=True, env=e)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(p.stdout.startswith("ok QUESTION t1"))
+        p = subprocess.run([sys.executable, CLI, "--journal", self.j, "send", "t1", "QUESTION"],
+                           capture_output=True, text=True,
+                           env={k: v for k, v in ENV.items() if k not in ("PASEO_AGENT_ID", "SLP_AGENT")})
+        self.assertEqual(p.returncode, 2)
 
 
 if __name__ == "__main__":

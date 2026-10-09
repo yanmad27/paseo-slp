@@ -145,12 +145,27 @@ A cancelled or merely closed upstream is not enough. Replay never re-checks the 
 
 `done-check LEAD [--running AGENT]... [--permission-pending AGENT]...` prints one `blocker <type> <task> <detail>`
 line per open loop and exits 3 (clean: one `ok` line, exit 0; Lead not known: `unknown-lead`). Types:
-`task-open` (any non-terminal task, including assigned/running with held scope, blocked, deferred),
-`candidate-undisposed`, `signal-undisposed`, `message-unprocessed`, `message-needs-reconcile`,
-`lease-expired`, `unreleased-scope`, and the caller-supplied `agent-running` / `permission-pending`.
-The journal cannot see Paseo run or permission state: those two come only from the flags (the caller
-reads Paseo). `message-unprocessed` includes every recorded or delivered message of the Lead's rooms except
-DONE/STATUS/DECISION_NEEDED, so seats must `deliver` ... `processed` for done-check to pass.
+`task-open` (any non-terminal task: assigned/running with held scope, blocked, deferred, needs repair),
+`candidate-undisposed`, `signal-undisposed` (a Peer signal without a Lead disposition - the protocol's
+"response without disposition"), `message-unprocessed` (a Lead message not yet answered on a still-open
+task), `message-needs-reconcile` (explicit `processing` left behind), `lease-expired`, `unreleased-scope`,
+and the caller-supplied `agent-running` / `permission-pending`. Lead messages on ACCEPTED / CANCELLED /
+REVIEWED tasks never block. The journal cannot see Paseo run or permission state: those two come only
+from the flags (the caller reads Paseo).
+
+### Implicit processing (no `deliver` needed)
+
+Seats run one command per signal, so processing is inferred from causation at record time and persisted
+in the fold (state `processed`, `implicit`). Explicit `deliver` stays available, is optional, and is a
+no-op on an implicitly processed message; an explicit `processing` is never overwritten.
+
+- A Lead disposition on a task (`accept`, `reject`, `send ANSWER|HOLD|"REVISED BRIEF"|DEFER`, `control
+  revoke|cancel|transfer`) marks every earlier unprocessed Peer signal on that task processed - or exactly
+  the one named by `--cause MSGID` for ANSWER/HOLD/REVISED BRIEF/DEFER (`unknown-cause` if it is not a
+  recorded message of the task). `accept`/`reject` also process the REVIEWs of that candidate.
+- A Peer's next signal on a task marks the Lead's earlier BRIEF/dispositions on that task processed.
+- ACCEPT and DEFER expect only an ACK, which is not journaled, so they are processed on record (an ACK
+  that is journaled is processed on record too).
 
 `control lead --from OLD --to NEW` (recorded by either; NEW must not own a held scope) moves the whole
 room's coordination. `state` then restores tasks, owners, scopes, candidates and open signals for NEW; OLD
@@ -162,7 +177,7 @@ Admin/low level: `append [FILE|-]`, `deliver <messageId> <state>`, `state`, `val
 `candidate-id <identity.json>`, `scope-overlap`, `contract`, `--version` (`slp-journal envelope-v1`),
 `--self-check`. Global: `--journal PATH` (or `SLP_JOURNAL`), `--now RFC3339Z`.
 
-Seat commands: sender `--as AGENT` (or `SLP_AGENT`), room `--room R` (or `SLP_ROOM`, or the task's room);
+Seat commands: sender `--as AGENT` (default `$PASEO_AGENT_ID`, then `SLP_AGENT`, so prompts omit it), room `--room R` (or `SLP_ROOM`, or the task's room);
 recipient is derived (Lead -> owner, Peer -> coordinator); `--id` makes a retry idempotent. One command per
 signal, one output line `ok [dup] SIGNAL TASK seq=N status=S msg=ID [cid=C]` (rejections: JSON, exit 3).
 
