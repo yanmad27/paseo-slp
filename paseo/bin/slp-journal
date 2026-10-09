@@ -495,11 +495,19 @@ def _process_task(st, taskid, classes, before, only=None):
             _process(st, mid)
 
 
-def _close_signals(st, taskid, cause=None, cid=None):
+def _close_signals(st, taskid, cause=None):
     for mid in [m for m, s in st["openSignals"].items()
-                if (cause is None and cid is None and s["taskId"] == taskid)
-                or (cause is not None and m == cause and s["taskId"] == taskid)
-                or (cid is not None and s.get("candidateId") == cid)]:
+                if s["taskId"] == taskid and (cause is None or m == cause)]:
+        del st["openSignals"][mid]
+        _process(st, mid)
+
+
+def _dispose_candidates(st, taskid):
+    """ACCEPT / REJECT dispose the task's CANDIDATE signals and the REVIEWs of its candidates recorded so far."""
+    for mid in [m for m, s in st["openSignals"].items()
+                if (s["taskId"] == taskid and s["signal"] == "CANDIDATE")
+                or (s.get("candidateId") in st["candidates"] and st["candidates"][s["candidateId"]]["taskId"] == taskid
+                    and s["signal"] == "REVIEW")]:
         del st["openSignals"][mid]
         _process(st, mid)
 
@@ -553,6 +561,7 @@ def apply_message(st, rec):
         t["status"], t["openReviews"] = "CANDIDATE_READY", []
         st["candidates"][cid] = {"taskId": env["taskId"], "messageId": mid, "seq": seq,
                                  "identity": canonical_identity(p["identity"]), "patchFile": p.get("patchFile")}
+        st["openSignals"][mid] = {"taskId": env["taskId"], "signal": sig, "candidateId": cid}
     elif sig == "REVIEW":
         cid = env.get("candidateId")
         if t["kind"] == "review":
@@ -568,6 +577,7 @@ def apply_message(st, rec):
             st["openSignals"][mid] = {"taskId": env["taskId"], "signal": sig, "candidateId": cid}
         elif cid:
             st["reviews"][mid] = (env["taskId"], cid)
+            st["openSignals"][mid] = {"taskId": env["taskId"], "signal": sig, "candidateId": cid}
         else:
             st["openSignals"][mid] = {"taskId": env["taskId"], "signal": sig, "candidateId": None}
     elif sig == "ACCEPT":
@@ -576,7 +586,7 @@ def apply_message(st, rec):
         _release(t, "released-by-accept", seq, t["owner"])
         t["acceptances"].append({"candidateId": cid, "messageId": mid, "seq": seq})
         _process_task(st, env["taskId"], ("CANDIDATE", "REVIEW"), seq)
-        _close_signals(st, env["taskId"], cid=cid)
+        _dispose_candidates(st, env["taskId"])
     elif sig == "REJECT":
         cid = env["candidateId"]
         t["rejections"].append({"candidateId": cid, "messageId": mid, "seq": seq})
@@ -592,7 +602,7 @@ def apply_message(st, rec):
                 t["owner"] = p["reassignTo"]
                 t["ownership"] = {"event": "reassigned", "seq": seq}
         _process_task(st, env["taskId"], ("CANDIDATE", "REVIEW"), seq)
-        _close_signals(st, env["taskId"], cid=cid)
+        _dispose_candidates(st, env["taskId"])
     elif sig in PEER_SIGNALS:
         st["openSignals"][mid] = {"taskId": env["taskId"], "signal": sig, "candidateId": None}
         if sig == "BLOCKED":

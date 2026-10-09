@@ -1131,5 +1131,50 @@ class ReviewRegressionTests(StateMachineBase):
         self.assertEqual((rc, r["reason"]), (3, "conflict"))
 
 
+class UniformSignalTrackingTests(StateMachineBase):
+    def test_late_review_after_accept_blocks_until_answered_with_cause(self):
+        self.brief_w()
+        c = self.cand_w()
+        self.sok("accept", "t1", "lead", "--cid", c, "--waive", "ok")
+        self.assertEqual(self.done(), (0, [], "ok done-check lead clean\n"))
+        self.sok("review", "t1", "reviewer", "--cid", c, "--id", "late-review")
+        rc, bl, r = self.done()
+        self.assertEqual((rc, bl), (3, ["signal-undisposed"]), r)
+        self.assertIn("late-review", r)
+        self.srej("unknown-cause", "send", "t1", "lead", "ANSWER", "--cause", "nope")
+        self.sok("send", "t1", "lead", "ANSWER", "--cause", "late-review")
+        self.assertEqual(self.done(), (0, [], "ok done-check lead clean\n"))
+
+    def test_every_peer_signal_is_tracked_until_disposed(self):
+        self.brief_w()
+        c = self.cand_w()
+        self.assertEqual({v["signal"] for v in self.tstate()["openSignals"].values()}, {"CANDIDATE"})
+        self.sok("review", "t1", "reviewer", "--cid", c, "--id", "rv-early")
+        self.sok("send", "t1", "peer", "REOPEN_REQUEST", "--note", "premise", "--id", "reopen")
+        self.assertEqual(len(self.tstate()["openSignals"]), 3)
+        self.sok("accept", "t1", "lead", "--cid", c, "--waive", "ok")
+        self.assertEqual(list(self.tstate()["openSignals"]), ["reopen"])
+        self.sok("send", "t1", "lead", "HOLD", "--cause", "reopen")
+        self.assertEqual(self.done()[0], 0)
+
+    def test_review_task_review_then_accept_is_disposed(self):
+        self.brief_w()
+        c = self.cand_w()
+        self.review_task("rt1", c)
+        self.sok("review", "rt1", "rev", "--id", "rt-review")
+        self.assertIn("rt-review", self.tstate()["openSignals"])
+        self.sok("accept", "t1", "lead", "--cid", c)
+        self.assertEqual(self.tstate()["openSignals"], {})
+        self.assertEqual(self.done()[0], 0)
+
+    def test_superseded_candidate_signals_are_disposed_with_the_current_one(self):
+        self.brief_w()
+        self.cand_w(n=1)
+        c2 = self.cand_w(n=2)
+        self.assertEqual(len(self.tstate()["openSignals"]), 2)
+        self.sok("reject", "t1", "lead", "--cid", c2)
+        self.assertEqual(self.tstate()["openSignals"], {})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1, warnings="ignore")

@@ -146,8 +146,8 @@ A cancelled or merely closed upstream is not enough. Replay never re-checks the 
 `done-check LEAD [--running AGENT]... [--permission-pending AGENT]...` prints one `blocker <type> <task> <detail>`
 line per open loop and exits 3 (clean: one `ok` line, exit 0; Lead not known: `unknown-lead`). Types:
 `task-open` (any non-terminal task: assigned/running with held scope, blocked, deferred, needs repair),
-`candidate-undisposed`, `signal-undisposed` (a QUESTION / BLOCKED / DEPENDENCY_REQUEST / REOPEN_REQUEST or non-candidate REVIEW
-still in `state.openSignals`, whatever its processing state - the protocol's "response without
+`candidate-undisposed`, `signal-undisposed` (any Peer signal - CANDIDATE, every REVIEW, QUESTION, BLOCKED, DEPENDENCY_REQUEST,
+REOPEN_REQUEST - still in `state.openSignals`, whatever its processing state - the protocol's "response without
 disposition"), `message-unprocessed` (a Lead message not yet answered on a still-open
 task), `message-needs-reconcile` (explicit `processing` left behind), `lease-expired`, `unreleased-scope`,
 and the caller-supplied `agent-running` / `permission-pending`. Lead messages on ACCEPTED / CANCELLED /
@@ -163,7 +163,9 @@ no-op on an implicitly processed message; an explicit `processing` is never over
 - A Lead disposition on a task (`accept`, `reject`, `send ANSWER|HOLD|"REVISED BRIEF"|DEFER`, `control
   revoke|cancel|transfer`) marks every earlier unprocessed Peer message on that task processed - or exactly
   the one named by `--cause MSGID` for ANSWER/HOLD/REVISED BRIEF/DEFER (`unknown-cause` if it is not a
-  recorded message of the task). `accept`/`reject` dispose only the candidate and its REVIEWs (and process those messages): a
+  recorded message of the task). `accept`/`reject` dispose only the task's CANDIDATE signals and the REVIEWs of its candidates recorded
+  before them (and process those messages); anything recorded later, e.g. a late REVIEW after ACCEPT, stays open until a
+  Lead `send ... --cause <id>` or `control revoke|cancel|transfer`: a
   QUESTION / BLOCKED / DEPENDENCY_REQUEST / REOPEN_REQUEST stays an open signal, and blocks `done-check`,
   until a Lead `send` (ANSWER/HOLD/REVISED BRIEF/DEFER) or `control revoke|cancel|transfer` disposes it.
   Disposition and delivery processing are separate.
