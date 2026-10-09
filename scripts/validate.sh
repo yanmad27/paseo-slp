@@ -1038,6 +1038,26 @@ else
   fail "slp-wait behaviour with a stub paseo is wrong"
 fi
 
+# --- room helper: slp-journal ------------------------------------------------
+
+if python3 scripts/test-slp-journal.py >"$TMP/journal.out" 2>&1; then
+  ok "scripts/test-slp-journal.py passes"
+else
+  tail -20 "$TMP/journal.out" >&2
+  fail "scripts/test-slp-journal.py failed"
+fi
+SCHEMA_DST="$RENDER_HOME/.config/slp-room/schemas/room-message.v1.schema.json"
+if [ -x "$BIN/slp-journal" ] \
+  && [ "$(stat -c %a "$BIN/slp-journal" 2>/dev/null || stat -f %Lp "$BIN/slp-journal")" = "755" ] \
+  && cmp -s paseo/bin/slp-journal "$BIN/slp-journal" \
+  && cmp -s paseo/schemas/room-message.v1.schema.json "$SCHEMA_DST" \
+  && [ "$("$BIN/slp-journal" --version)" = "slp-journal envelope-v$(jq -r '.properties.version.const' "$SCHEMA_DST")" ] \
+  && [ -z "$(find "$RENDER_HOME/.config/slp-room" -name '*.jsonl' 2>/dev/null)" ]; then
+  ok "install.sh installs slp-journal (0755) and its schema; --version matches the schema version; no journal is created"
+else
+  fail "slp-journal/schema not installed as expected, or its --version differs from the schema version"
+fi
+
 # --- room rules: Supervisor wait, room-state block, Lead DONE, heartbeat ------
 
 # Static: the rules exist, and the old instructions are gone.

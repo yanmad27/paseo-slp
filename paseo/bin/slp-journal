@@ -1,0 +1,597 @@
+#!/usr/bin/env python3
+"""slp-journal: versioned room message envelope + append-only durable journal (stdlib only).
+
+Every mutating operation (dedup lookup, transition validation, seq allocation, append, fsync)
+runs under ONE exclusive flock on <journal>.lock. See docs/ROOM_JOURNAL.md.
+Exit codes: 0 ok, 2 usage, 3 rejected (reason in JSON on stdout), 4 journal corrupt/unusable.
+"""
+import argparse
+import datetime
+import errno
+import fcntl
+import hashlib
+import json
+import os
+import posixpath
+import re
+import sys
+import tempfile
+import uuid
+
+ENVELOPE_VERSION = 1
+SIGNALS = ["CANDIDATE", "REVIEW", "REOPEN_REQUEST", "DEPENDENCY_REQUEST", "BLOCKED", "QUESTION", "ACK",
+           "ACCEPT", "REJECT", "REVISED BRIEF", "HOLD", "ANSWER", "DEFER",
+           "DONE", "STATUS", "DECISION_NEEDED", "BRIEF"]
+REVIEW_KINDS = ["candidate", "plan", "watch", "other"]
+CANDIDATE_REQUIRED_SIGNALS = ["CANDIDATE", "ACCEPT", "REJECT"]
+REQUIRED = ["version", "roomId", "taskId", "messageId", "causationId", "senderAgentId",
+            "recipientAgentId", "signal", "createdAt", "payload"]
+OPTIONAL = ["candidateId"]
+ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+ID_MAXLEN = 128
+CANDIDATE_ID_PATTERN = r"^[0-9a-f]{64}$"
+TIME_PATTERN = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?Z$"
+PAYLOAD_MAX_BYTES = 16384
+DELIVERY_STATES = ["recorded", "delivered", "processing", "processed"]
+
+ID_RE = re.compile(ID_PATTERN)
+CID_RE = re.compile(CANDIDATE_ID_PATTERN)
+TIME_RE = re.compile(TIME_PATTERN)
+HEX_RE = re.compile(r"^[0-9a-f]{7,64}$")
+
+
+class Reject(Exception):
+    def __init__(self, reason, detail=""):
+        super().__init__(reason)
+        self.reason, self.detail = reason, detail
+
+
+class Corrupt(Exception):
+    def __init__(self, msg, reason="journal-corrupt"):
+        super().__init__(msg)
+        self.reason = reason
+
+
+def canon(obj):
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _is_id(v):
+    return isinstance(v, str) and ID_RE.match(v) is not None
+
+
+def validate_envelope(env):
+    if not isinstance(env, dict):
+        raise Reject("not-an-object")
+    for k in REQUIRED:
+        if k not in env:
+            raise Reject("missing-field", k)
+    for k in env:
+        if k not in REQUIRED and k not in OPTIONAL:
+            raise Reject("unknown-field", k)
+    v = env["version"]
+    if isinstance(v, bool) or v != ENVELOPE_VERSION or not isinstance(v, int):
+        raise Reject("bad-version", repr(v))
+    for k in ("roomId", "taskId", "messageId", "senderAgentId", "recipientAgentId"):
+        if not _is_id(env[k]):
+            raise Reject("bad-id", k)
+    if env["causationId"] is not None and not _is_id(env["causationId"]):
+        raise Reject("bad-id", "causationId")
+    if env["signal"] not in SIGNALS:
+        raise Reject("bad-signal", repr(env["signal"]))
+    t = env["createdAt"]
+    if not isinstance(t, str) or not TIME_RE.match(t):
+        raise Reject("bad-createdAt", "RFC3339 UTC with Z required")
+    try:
+        datetime.datetime.strptime(t.rstrip("Z").split(".")[0], "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        raise Reject("bad-createdAt", "not a real date-time")
+    if not isinstance(env["payload"], dict):
+        raise Reject("bad-payload", "must be an object")
+    if len(canon(env["payload"]).encode()) > PAYLOAD_MAX_BYTES:
+        raise Reject("payload-too-large", "limit %d bytes" % PAYLOAD_MAX_BYTES)
+    sig = env["signal"]
+    has = "candidateId" in env
+    if has and (not isinstance(env["candidateId"], str) or not CID_RE.match(env["candidateId"])):
+        raise Reject("bad-candidateId", "64 lowercase hex chars")
+    if sig == "REVIEW":
+        kind = env["payload"].get("kind")
+        if kind not in REVIEW_KINDS:
+            raise Reject("bad-review-kind", "payload.kind must be one of %s" % REVIEW_KINDS)
+        if kind == "candidate" and not has:
+            raise Reject("missing-field", "candidateId")
+        if kind != "candidate" and has:
+            raise Reject("unexpected-candidateId", "only candidate REVIEWs carry a candidate")
+    elif sig in CANDIDATE_REQUIRED_SIGNALS and not has:
+        raise Reject("missing-field", "candidateId")
+
+
+def norm_rel(p):
+    if not isinstance(p, str) or not p or p.startswith("/") or "\x00" in p:
+        raise Reject("bad-path", repr(p))
+    n = posixpath.normpath(p)
+    if n == ".." or n.startswith("../"):
+        raise Reject("bad-path", "escapes: %s" % p)
+    return n
+
+
+def canonical_identity(ident):
+    if not isinstance(ident, dict):
+        raise Reject("bad-identity", "must be an object")
+    allowed = {"base", "commit", "patchSha256", "changedPaths", "evidenceRefs"}
+    extra = set(ident) - allowed
+    if extra:
+        raise Reject("bad-identity", "unknown keys %s" % sorted(extra))
+    base = ident.get("base")
+    if not isinstance(base, str) or not base or len(base) > 200:
+        raise Reject("bad-identity", "base")
+    out = {"base": base}
+    c, ps = ident.get("commit"), ident.get("patchSha256")
+    if (c is None) == (ps is None):
+        raise Reject("bad-identity", "exactly one of commit, patchSha256")
+    if c is not None:
+        if not isinstance(c, str) or not HEX_RE.match(c):
+            raise Reject("bad-identity", "commit")
+        out["commit"] = c
+    else:
+        if not isinstance(ps, str) or not CID_RE.match(ps):
+            raise Reject("bad-identity", "patchSha256")
+        out["patchSha256"] = ps
+    cp = ident.get("changedPaths")
+    if not isinstance(cp, list) or not cp:
+        raise Reject("bad-identity", "changedPaths must be a non-empty list")
+    out["changedPaths"] = sorted({norm_rel(p) for p in cp})
+    ev = ident.get("evidenceRefs", [])
+    if not isinstance(ev, list) or any(not isinstance(e, str) or not e or len(e) > 512 for e in ev):
+        raise Reject("bad-identity", "evidenceRefs")
+    out["evidenceRefs"] = sorted(set(ev))
+    return out
+
+
+def candidate_id(ident):
+    return hashlib.sha256(canon(canonical_identity(ident)).encode()).hexdigest()
+
+
+def canon_scope(root, paths):
+    if not isinstance(root, str) or not os.path.isabs(root):
+        raise Reject("bad-scope", "root must be an absolute path")
+    if not isinstance(paths, list) or not paths:
+        raise Reject("bad-scope", "paths must be a non-empty list")
+    rootc = os.path.realpath(root)
+    out = set()
+    for p in paths:
+        if not isinstance(p, str) or not p or "\x00" in p:
+            raise Reject("bad-scope", repr(p))
+        full = os.path.realpath(p if os.path.isabs(p) else os.path.join(rootc, p))
+        if full != rootc and not full.startswith(rootc + os.sep):
+            raise Reject("scope-escape", p)
+        out.add(os.path.relpath(full, rootc))
+    rels = sorted(out)
+    return rootc, rels
+
+
+def _parts(rel):
+    return () if rel == "." else tuple(rel.split(os.sep))
+
+
+def abs_paths(rootc, rels):
+    return [rootc if r == "." else os.path.join(rootc, r) for r in rels]
+
+
+def abs_overlap(a, b):
+    for x in a:
+        for y in b:
+            px, py = tuple(c for c in x.split(os.sep) if c), tuple(c for c in y.split(os.sep) if c)
+            n = min(len(px), len(py))
+            if px[:n] == py[:n]:
+                return True
+    return False
+
+
+def paths_overlap(a, b):
+    for x in a:
+        for y in b:
+            px, py = _parts(x), _parts(y)
+            n = min(len(px), len(py))
+            if px[:n] == py[:n]:
+                return True
+    return False
+
+
+# ---------------------------------------------------------------- state fold
+
+def new_state():
+    return {"lastSeq": 0, "tasks": {}, "messages": {}, "candidates": {}}
+
+
+def _task(st, env):
+    return st["tasks"].get(env["taskId"])
+
+
+def check_transition(st, env):
+    sig = env["signal"]
+    t = _task(st, env)
+    if sig == "BRIEF":
+        if t is not None:
+            raise Reject("task-exists", env["taskId"])
+        ws = env["payload"].get("writeScope")
+        if not isinstance(ws, dict) or set(ws) != {"root", "paths"}:
+            raise Reject("bad-scope", "payload.writeScope = {root, paths[]} required")
+        rootc, paths = canon_scope(ws["root"], ws["paths"])
+        absp = abs_paths(rootc, paths)
+        for tid, o in st["tasks"].items():
+            if (not o["scopeReleased"] and o["owner"] != env["recipientAgentId"]
+                    and abs_overlap(absp, o["writeScope"]["absPaths"])):
+                raise Reject("scope-conflict", "overlaps unreleased scope of task %s owned by %s" % (tid, o["owner"]))
+        return {"root": rootc, "paths": paths, "absPaths": absp}
+    if sig not in ("CANDIDATE", "ACCEPT", "REJECT") and not (sig == "REVIEW" and env["payload"]["kind"] == "candidate"):
+        return
+    if t is None:
+        raise Reject("unknown-task", env["taskId"])
+    if t["roomId"] != env["roomId"]:
+        raise Reject("room-mismatch", env["roomId"])
+    cid = env["candidateId"]
+    if sig == "CANDIDATE":
+        if env["senderAgentId"] != t["owner"]:
+            raise Reject("not-owner", env["senderAgentId"])
+        if t["acceptedCandidate"]:
+            raise Reject("task-closed", "already accepted")
+        ident = env["payload"].get("identity")
+        if candidate_id(ident) != cid:
+            raise Reject("candidate-id-mismatch", "candidateId is not sha256 of the canonical identity")
+        if cid in st["candidates"]:
+            raise Reject("candidate-exists", cid)
+        return
+    c = st["candidates"].get(cid)
+    if c is None:
+        raise Reject("unknown-candidate", cid)
+    if c["taskId"] != env["taskId"]:
+        raise Reject("cross-task-candidate", c["taskId"])
+    if sig == "REVIEW":
+        return
+    if t["acceptedCandidate"]:
+        raise Reject("already-accepted", t["acceptedCandidate"])
+    if t["currentCandidate"] != cid:
+        raise Reject("stale-candidate", "current is %s" % t["currentCandidate"])
+    if sig == "ACCEPT":
+        rid, waived = env["payload"].get("reviewMessageId"), env["payload"].get("reviewWaived")
+        if rid is not None:
+            if st["reviews"].get(rid) != (env["taskId"], cid):
+                raise Reject("review-mismatch", "reviewMessageId is not a REVIEW of exactly this candidate")
+        elif not (isinstance(waived, str) and waived.strip()):
+            raise Reject("review-required", "payload.reviewMessageId or non-empty payload.reviewWaived")
+
+
+def apply_message(st, rec):
+    env, seq = rec["envelope"], rec["seq"]
+    st["messages"][env["messageId"]] = {"seq": seq, "signal": env["signal"], "state": "recorded", "canon": canon(env)}
+    sig = env["signal"]
+    if sig == "BRIEF":
+        rs = rec["resolvedScope"]
+        st["tasks"][env["taskId"]] = {
+            "roomId": env["roomId"], "owner": env["recipientAgentId"],
+            "writeScope": {"root": rs["root"], "paths": list(rs["paths"]), "absPaths": list(rs["absPaths"])},
+            "scopeReleased": False,
+            "candidates": [], "currentCandidate": None, "acceptedCandidate": None,
+            "acceptances": [], "rejections": []}
+        return
+    t = st["tasks"].get(env["taskId"])
+    if t is None:
+        return
+    if sig == "CANDIDATE":
+        cid = env["candidateId"]
+        t["candidates"].append(cid)
+        t["currentCandidate"] = cid
+        st["candidates"][cid] = {"taskId": env["taskId"], "messageId": env["messageId"], "seq": seq}
+    elif sig == "REVIEW" and env["payload"]["kind"] == "candidate":
+        st.setdefault("reviews", {})[env["messageId"]] = (env["taskId"], env["candidateId"])
+    elif sig == "ACCEPT":
+        t["acceptedCandidate"] = env["candidateId"]
+        t["scopeReleased"] = True
+        t["acceptances"].append({"candidateId": env["candidateId"], "messageId": env["messageId"], "seq": seq})
+    elif sig == "REJECT":
+        t["rejections"].append({"candidateId": env["candidateId"], "messageId": env["messageId"], "seq": seq})
+
+
+def apply_record(st, rec):
+    if rec["kind"] == "message":
+        apply_message(st, rec)
+    else:
+        st["messages"][rec["messageId"]]["state"] = rec["state"]
+    st["lastSeq"] = rec["seq"]
+
+
+def fold(records):
+    st = new_state()
+    st["reviews"] = {}
+    for rec in records:
+        try:
+            apply_record(st, rec)
+        except (KeyError, TypeError, Reject) as e:
+            raise Corrupt("seq %s: record does not fold (%s)" % (rec.get("seq"), e))
+    return st
+
+
+def public_state(st):
+    msgs = st["messages"]
+    return {
+        "lastSeq": st["lastSeq"],
+        "tasks": {k: {**v, "scopeReleased": v["scopeReleased"]} for k, v in st["tasks"].items()},
+        "unprocessed": sorted((m for m, v in msgs.items() if v["state"] in ("recorded", "delivered")), key=lambda m: msgs[m]["seq"]),
+        "needsReconcile": sorted((m for m, v in msgs.items() if v["state"] == "processing"), key=lambda m: msgs[m]["seq"]),
+        "messages": {m: {"seq": v["seq"], "signal": v["signal"], "state": v["state"]} for m, v in msgs.items()},
+    }
+
+
+# ---------------------------------------------------------------- storage
+
+def fsync_dir(d):
+    fd = os.open(d, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    except OSError as e:
+        if e.errno not in (errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP):
+            raise
+    finally:
+        os.close(fd)
+
+
+def fsync_ancestors(d):
+    """fsync d and every ancestor up to the filesystem root, independent of any other writer."""
+    while True:
+        fsync_dir(d)
+        parent = os.path.dirname(d)
+        if parent == d:
+            return
+        d = parent
+
+
+def make_dirs_durable(d):
+    """Create missing levels one at a time (0700), fsyncing each new directory's containing directory."""
+    missing = []
+    while not os.path.isdir(d):
+        missing.append(d)
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    for m in reversed(missing):
+        try:
+            os.mkdir(m, 0o700)
+        except FileExistsError:
+            pass
+        fsync_dir(os.path.dirname(m))
+
+
+def open_new_or_existing(path, flags):
+    """Open read/write, creating 0600 if missing (directory durability: see Journal.__enter__)."""
+    try:
+        return os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600), True
+    except FileExistsError:
+        return os.open(path, flags), False
+
+
+class Journal:
+    def __init__(self, path, write):
+        self.path, self.write, self.repaired = path, write, None
+
+    def __enter__(self):
+        # Resolve first: every alias of one journal must take the same lock.
+        self.path = os.path.join(os.path.realpath(os.path.dirname(os.path.abspath(self.path))),
+                                 os.path.basename(self.path))
+        if os.path.islink(self.path):
+            self.path = os.path.realpath(self.path)
+        d = os.path.dirname(self.path)
+        if self.write:
+            make_dirs_durable(d)
+        elif not os.path.isdir(d):
+            raise Corrupt("journal directory does not exist")
+        self.fd = None
+        self.lfd, _ = open_new_or_existing(self.path + ".lock", os.O_RDWR)
+        try:
+            fcntl.flock(self.lfd, fcntl.LOCK_EX if self.write else fcntl.LOCK_SH)
+            if self.write:
+                self.fd, _ = open_new_or_existing(self.path, os.O_RDWR)
+                # Whoever created the files, their directory entries are made durable under our
+                # lock before this operation can acknowledge a write.
+                fsync_ancestors(d)
+            else:
+                try:
+                    self.fd = os.open(self.path, os.O_RDONLY)
+                except FileNotFoundError:
+                    self.fd = None
+            if self.fd is not None:
+                st = os.fstat(self.fd)
+                if st.st_mode & 0o077:
+                    if st.st_uid != os.geteuid():
+                        raise Corrupt("journal is accessible by group/other and not owned by us", "journal-permissions")
+                    os.fchmod(self.fd, 0o600)
+            self.records, self.state = self._load()
+        except BaseException:
+            self.__exit__()
+            raise
+        return self
+
+    def __exit__(self, *a):
+        if self.fd is not None:
+            os.close(self.fd)
+        os.close(self.lfd)
+
+    def _load(self):
+        if self.fd is None:
+            return [], fold([])
+        os.lseek(self.fd, 0, os.SEEK_SET)
+        chunks = []
+        while True:
+            b = os.read(self.fd, 1 << 20)
+            if not b:
+                break
+            chunks.append(b)
+        data = b"".join(chunks)
+        end = data.rfind(b"\n") + 1
+        torn = len(data) - end
+        data = data[:end]
+        recs, off = [], 0
+        for line in data.split(b"\n")[:-1]:
+            try:
+                rec = json.loads(line)
+                if (not isinstance(rec, dict) or rec.get("seq") != len(recs) + 1
+                        or rec.get("kind") not in ("message", "delivery") or not isinstance(rec.get("entryId"), str)):
+                    raise ValueError("bad record shape or seq not gapless")
+                if rec["kind"] == "message":
+                    validate_envelope(rec["envelope"])
+                elif rec.get("state") not in DELIVERY_STATES[1:] or rec.get("messageId") is None:
+                    raise ValueError("bad delivery record")
+            except (ValueError, KeyError, Reject) as e:
+                raise Corrupt("corrupt record at seq %d, offset %d: %s" % (len(recs) + 1, off, e))
+            recs.append(rec)
+            off += len(line) + 1
+        st = fold(recs)
+        if torn:
+            self.repaired = {"truncatedBytes": torn, "atOffset": end}
+            if self.write:
+                os.ftruncate(self.fd, end)
+                os.fsync(self.fd)
+        return recs, st
+
+    def _append(self, rec):
+        rec = {"seq": self.state["lastSeq"] + 1, "entryId": uuid.uuid4().hex, **rec,
+               "recordedAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        os.lseek(self.fd, 0, os.SEEK_END)
+        line = (canon(rec) + "\n").encode()
+        if os.write(self.fd, line) != len(line):
+            raise Corrupt("short write")
+        os.fsync(self.fd)
+        apply_record(self.state, rec)
+        return rec
+
+    def append_message(self, env):
+        validate_envelope(env)
+        old = self.state["messages"].get(env["messageId"])
+        if old is not None:
+            if old["canon"] == canon(env):
+                return {"ok": True, "duplicate": True, "seq": old["seq"]}
+            raise Reject("conflict", "messageId already recorded with different content")
+        extra = {}
+        scope = check_transition(self.state, env)
+        if scope is not None:
+            extra["resolvedScope"] = scope
+        rec = self._append({"kind": "message", "envelope": env, **extra})
+        return {"ok": True, "duplicate": False, "seq": rec["seq"]}
+
+    def deliver(self, message_id, state):
+        if state not in DELIVERY_STATES[1:]:
+            raise Reject("bad-delivery-state", state)
+        m = self.state["messages"].get(message_id)
+        if m is None:
+            raise Reject("unknown-message", message_id)
+        cur, new = DELIVERY_STATES.index(m["state"]), DELIVERY_STATES.index(state)
+        if new == cur:
+            return {"ok": True, "duplicate": True, "state": state}
+        if new < cur:
+            raise Reject("state-regression", "%s -> %s" % (m["state"], state))
+        if new != cur + 1:
+            raise Reject("state-out-of-order", "%s -> %s" % (m["state"], state))
+        rec = self._append({"kind": "delivery", "messageId": message_id, "state": state})
+        return {"ok": True, "duplicate": False, "seq": rec["seq"], "state": state}
+
+
+# ---------------------------------------------------------------- CLI
+
+def out(obj, code=0):
+    sys.stdout.write(json.dumps(obj, sort_keys=True) + "\n")
+    sys.stdout.flush()
+    return code
+
+
+def read_json(src):
+    try:
+        raw = sys.stdin.read() if src in (None, "-") else open(src, encoding="utf-8").read()
+        return json.loads(raw)
+    except (OSError, ValueError) as e:
+        raise Reject("unreadable-json", str(e))
+
+
+def contract():
+    return {"version": ENVELOPE_VERSION, "required": REQUIRED, "optional": OPTIONAL, "signals": SIGNALS,
+            "reviewKinds": REVIEW_KINDS, "candidateRequiredSignals": CANDIDATE_REQUIRED_SIGNALS,
+            "idPattern": ID_PATTERN, "idMaxLength": ID_MAXLEN, "candidateIdPattern": CANDIDATE_ID_PATTERN,
+            "timePattern": TIME_PATTERN, "payloadMaxBytes": PAYLOAD_MAX_BYTES}
+
+
+def self_check():
+    if sys.version_info < (3, 9):
+        raise Corrupt("python >= 3.9 required")
+    with tempfile.TemporaryDirectory() as d:
+        fd = os.open(os.path.join(d, "l"), os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.close(fd)
+    a = candidate_id({"base": "b", "commit": "abcdef1", "changedPaths": ["x/./y", "a"], "evidenceRefs": []})
+    b = candidate_id({"base": "b", "commit": "abcdef1", "changedPaths": ["a", "x/y"]})
+    if a != b:
+        raise Corrupt("candidate id is not canonical")
+    return {"ok": True, "python": sys.version.split()[0], "flock": True, "envelopeVersion": ENVELOPE_VERSION}
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog="slp-journal")
+    ap.add_argument("--version", action="store_true")
+    ap.add_argument("--self-check", action="store_true")
+    ap.add_argument("--journal", default=os.environ.get("SLP_JOURNAL"))
+    sub = ap.add_subparsers(dest="cmd")
+    s = sub.add_parser("append"); s.add_argument("file", nargs="?")
+    s = sub.add_parser("deliver"); s.add_argument("message_id"); s.add_argument("state")
+    sub.add_parser("state")
+    sub.add_parser("contract")
+    s = sub.add_parser("validate"); s.add_argument("file")
+    s = sub.add_parser("candidate-id"); s.add_argument("file")
+    s = sub.add_parser("scope-overlap")
+    s.add_argument("--root", required=True); s.add_argument("--a", action="append", required=True)
+    s.add_argument("--b", action="append", required=True)
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit as e:
+        return 2 if e.code else 0
+    try:
+        if a.version:
+            sys.stdout.write("slp-journal envelope-v%d\n" % ENVELOPE_VERSION)
+            return 0
+        if a.self_check:
+            return out(self_check())
+        if a.cmd is None:
+            ap.print_usage(sys.stderr)
+            return 2
+        if a.cmd == "contract":
+            return out(contract())
+        if a.cmd == "validate":
+            validate_envelope(read_json(a.file))
+            return out({"ok": True})
+        if a.cmd == "candidate-id":
+            return out({"candidateId": candidate_id(read_json(a.file))})
+        if a.cmd == "scope-overlap":
+            rootc, pa = canon_scope(a.root, a.a)
+            _, pb = canon_scope(a.root, a.b)
+            return out({"overlap": paths_overlap(pa, pb), "root": rootc, "a": pa, "b": pb})
+        if not a.journal:
+            sys.stderr.write("slp-journal: --journal PATH or SLP_JOURNAL required\n")
+            return 2
+        with Journal(a.journal, write=a.cmd != "state") as j:
+            if a.cmd == "state":
+                r = public_state(j.state)
+            elif a.cmd == "append":
+                r = j.append_message(read_json(a.file))
+            else:
+                r = j.deliver(a.message_id, a.state)
+            if j.repaired:
+                r["repaired"] = j.repaired
+            return out(r)
+    except Reject as e:
+        return out({"ok": False, "reason": e.reason, "detail": e.detail}, 3)
+    except Corrupt as e:
+        return out({"ok": False, "reason": e.reason, "detail": str(e)}, 4)
+    except OSError as e:
+        return out({"ok": False, "reason": "io-error", "detail": str(e)}, 4)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

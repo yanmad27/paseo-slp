@@ -58,6 +58,13 @@ Invariants it checks:
   `install.sh`), it exists in the temp install, and no token is left; the
   rendered Lead prompt names no `slp-wait`, and `claude-lead`'s other denies
   (whole `Bash(paseo:*)` included) stay main's.
+- `slp-journal`: `paseo/bin/slp-journal` (stdlib Python >= 3.9) is installed at
+  `$HOME/.config/slp-room/bin/slp-journal` (0755) with
+  `paseo/schemas/room-message.v1.schema.json` under `$HOME/.config/slp-room/schemas/`;
+  `install.sh` skips it with a warning when python3 >= 3.9 is missing and never
+  creates a journal. `scripts/test-slp-journal.py` passes, and `--version`
+  matches the schema's `version`. It is a helper only: `PROTOCOL.md`, `SKILL.md`
+  and the role files do not call it. See `docs/ROOM_JOURNAL.md`.
 - `README.md`: keeps `## Install`/`## Usage`/`## Troubleshooting` and
   mentions `/supervisor`.
 - `.release-please-manifest.json`: `.["."]` matches plugin.json `.version`.
