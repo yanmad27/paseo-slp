@@ -297,8 +297,8 @@ if jq -e '.agents.providers as $p
     and $p["claude-supervisor"].env == {"CLAUDE_CONFIG_DIR": "@@ROOM_HOME@@/claude-supervisor", "CLAUDE_CODE_OAUTH_TOKEN": "@@CLAUDE_OAUTH_TOKEN@@"}
     and ($p["claude-supervisor"] | has("paseoTools") | not)
     and $p["claude-lead"].extends == "claude"
-    and $p["claude-lead"].env == {"CLAUDE_CONFIG_DIR": "@@ROOM_HOME@@/claude-lead", "CLAUDE_CODE_OAUTH_TOKEN": "@@CLAUDE_OAUTH_TOKEN@@"}
-    and $p["claude-peer"].env == {"CLAUDE_CONFIG_DIR": "@@ROOM_HOME@@/claude-peer", "CLAUDE_CODE_OAUTH_TOKEN": "@@CLAUDE_OAUTH_TOKEN@@"}
+    and $p["claude-lead"].env == {"CLAUDE_CONFIG_DIR": "@@ROOM_HOME@@/claude-lead", "SLP_JOURNAL": "@@ROOM_HOME@@/state/journal.jsonl", "CLAUDE_CODE_OAUTH_TOKEN": "@@CLAUDE_OAUTH_TOKEN@@"}
+    and $p["claude-peer"].env == {"CLAUDE_CONFIG_DIR": "@@ROOM_HOME@@/claude-peer", "SLP_JOURNAL": "@@ROOM_HOME@@/state/journal.jsonl", "CLAUDE_CODE_OAUTH_TOKEN": "@@CLAUDE_OAUTH_TOKEN@@"}
     and ($p["claude-lead"] | has("command") | not) and ($p["claude-peer"] | has("command") | not)
     and ($p["claude-lead"].paseoTools.disabledTools | index("create_agent") == null and index("create_heartbeat") != null)
     and $p["codex-peer"].command == ["@@ROOM_HOME@@/bin/codex-peer"]' "$SNIPPET" >/dev/null; then
@@ -471,7 +471,7 @@ if PATH="$RENDER_HOME/bin:$PATH" HOME="$RENDER_HOME" env -u CODEX_HOME "$REPO_RO
              and index("Bash(" + $bin + "/paseo:*)") == null)' "$RENDER_HOME/.paseo/config.json" >/dev/null \
     && [ "$(stat -c %a "$RENDER_HOME/.paseo/config.json" 2>/dev/null || stat -f %Lp "$RENDER_HOME/.paseo/config.json")" = "600" ] \
     && jq -e --arg dir "$ROOM" '.agents.providers["claude-lead"].env
-        == {"CLAUDE_CONFIG_DIR": ($dir + "/claude-lead"), "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test"}' \
+        == {"CLAUDE_CONFIG_DIR": ($dir + "/claude-lead"), "SLP_JOURNAL": ($dir + "/state/journal.jsonl"), "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test"}' \
       "$RENDER_HOME/.paseo/config.json" >/dev/null; then
     ok "install.sh renders the Claude runtimes, the Codex launcher, and a private config with the shared token"
   else
@@ -645,7 +645,7 @@ if jev_install "$JH" --jev >/dev/null 2>&1; then
     [ "$(readlink "$JROOM/$s/CLAUDE.md")" = "$JH/.claude/CLAUDE.md" ] || JEV_ON_OK=0
   done
   # byte-identity of the room copy of lead.md against the sources filtered for on
-  jevf_ref on "$REPO_ROOT/skills/supervisor/roles/lead.md" | cmp -s - "$JROOM/room/roles/lead.md" || JEV_ON_OK=0
+  jevf_ref on "$REPO_ROOT/skills/supervisor/roles/lead.md" | sed "s|@@SLP_JOURNAL@@|$JROOM/bin/slp-journal|g" | cmp -s - "$JROOM/room/roles/lead.md" || JEV_ON_OK=0
   if [ "$JEV_ON_OK" = 1 ]; then
     ok "install.sh --jev keeps Tier decision via ask-jev in prompts, ask-jev enabled with its hooks, and the seat CLAUDE.md symlinks"
   else
@@ -773,7 +773,7 @@ for form in bearer x-api-key; do
   if HOME="$EP_HOME" SLP_CLAUDE_BASE_URL=https://gateway.example.com SLP_CLAUDE_AUTH_TOKEN="k e y" \
       SLP_CLAUDE_AUTH_HEADER="$form" "$REPO_ROOT/install.sh" --paseo-only --no-reload >/dev/null 2>&1 \
     && jq -e --arg kv "$KEYVAR" '[.agents.providers | to_entries[] | select(.key | startswith("claude-")) | .value.env
-        | keys | sort == (["ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR", $kv] | sort)] | length == 3 and all' \
+        | keys | map(select(. != "SLP_JOURNAL")) | sort == (["ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR", $kv] | sort)] | length == 3 and all' \
       "$EP_HOME/.paseo/config.json" >/dev/null; then :; else EP_OK=0; fi
 done
 # The older alias SLP_CLAUDE_API_KEY still renders the same key; both names set and different is refused.
@@ -1316,7 +1316,8 @@ JOURNAL_PHRASES=(
   'roles/lead.md|recording coordination events with `slp-journal`'
   'roles/lead.md|Task id: <short slug> (for slp-journal)'
   'roles/lead.md|never polled or read back; a failed call never blocks the signal.'
-  'roles/lead.md|--room "$PASEO_AGENT_ID" --root DIR --path P...'
+  'roles/lead.md|brief T --to PEER --room R --root DIR --path P...'
+  'roles/peer.md|(--commit SHA | --patch-sha H --patch-file F)'
   'roles/lead.md|Run `done-check` once before `DONE`'
   'roles/lead.md|control lead --from OLD --to NEW --room OLD'
   'roles/peer.md|record it with your'

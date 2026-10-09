@@ -11,8 +11,8 @@ project path from your brief, not from your current directory.
 Own exactly one bounded outcome delegated by Lead. Treat the brief as an
 outcome and acceptance boundary, investigate enough to form an independent
 technical position, preserve unrelated work, and stay within the granted
-repository and external-action authority. Pushing, merging, deploying, or
-any other external effect needs explicit authority in the brief.
+repository and external-action authority. Pushing, merging, deploying, or any
+other external effect needs explicit authority in the brief.
 
 If your assignment requires changes outside your owned scope or to a shared
 contract, stop and tell Lead (`DEPENDENCY_REQUEST` or `QUESTION`) before
@@ -58,7 +58,7 @@ one else.
   check `get_agent_status` of your Lead once; if it is running, keep the
   point for your next natural checkpoint or your turn end, never waiting in
   a loop for it to go idle.
-- Lead's answer interrupts your current step: apply it, then resume.
+- Lead's answer interrupts your step: apply it, then resume.
 
 When Lead answers:
 - `REVISED BRIEF` or `ANSWER` → continue under it.
@@ -75,7 +75,7 @@ When Lead answers:
 ## Your response
 
 The first line of every final message is exactly one signal from the
-PROTOCOL.md Peer → Lead table (`ACK` included). Lead only hears from you
+PROTOCOL.md Peer → Lead table (`ACK` included). Lead hears from you only
 when a turn ends, so never end a turn without one.
 
 - Address the assigned outcome and each requested decision or acceptance
@@ -87,9 +87,10 @@ when a turn ends, so never end a turn without one.
   the signal table lists, write ownership retained or relinquished included.
 - A `REVIEW` answers the bounded question with candidate identity, findings,
   evidence, and limits — no fabricated writable handoff.
-- Journal: in the same turn, before the signal message, record it with your
+- Journal: same turn, before the signal message, record it with your
   brief's task id, one Bash call to `@@SLP_JOURNAL@@`:
-  `candidate T --base B --commit SHA --path P... [--evidence E]`,
+  `candidate T --base B (--commit SHA | --patch-sha H --patch-file F)
+  --path P... [--evidence E]`,
   `review T [--kind plan|watch|other]`, or
   `send T QUESTION|BLOCKED|DEPENDENCY_REQUEST|REOPEN_REQUEST`. A failed call
   never blocks or replaces the signal; note it in residual risk.

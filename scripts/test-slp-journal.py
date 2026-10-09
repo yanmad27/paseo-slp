@@ -1191,8 +1191,9 @@ class RenderedPromptTests(unittest.TestCase):
             return f.read()
 
     @staticmethod
-    def _bind(template, vals, opts=(), alt=None):
+    def _bind(template, vals, opts=(), alt=None, pick=1):
         """Turn a prompt command template into argv: choose alternatives, fill placeholders."""
+        template = re.sub(r"\(([^()|]*) \| ([^()]*)\)", lambda m: m.group(pick), template)
         for flag in re.findall(r"\[(--[\w-]+)[^\]]*\]", template):
             template = re.sub(r"\[" + re.escape(flag) + r"[^\]]*\]",
                               (flag + " " + vals["opt:" + flag]) if flag in opts else "", template, count=1)
@@ -1235,6 +1236,7 @@ class RenderedPromptTests(unittest.TestCase):
         self.assertEqual(set(cmds) - {"transfer"}, {"brief", "brief-review", "accept", "reject", "send", "control", "done-check"})
         ctl = re.search(r"records `(control lead [^`]+)`", lead).group(1)
         self.assertIn("`state`", lead)
+        self.assertIn("`R` your room id", lead)
         pj = re.search(r"Journal:.*?one Bash call to `" + re.escape(jbin) + r"`:(.*?)\n- ", peer, re.S)
         self.assertTrue(pj, "Peer prompt has no Journal rule naming the helper")
         pcmds = {c.split()[0]: c for c in re.findall(r"`([a-z]+ T[^`]*)`", pj.group(1))}
@@ -1242,18 +1244,24 @@ class RenderedPromptTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             jp = os.path.join(d, "state", "journal.jsonl")
+            pf = os.path.join(d, "snap.patch")
+            with open(pf, "w") as f:
+                f.write("snapshot\n")
             v = {"T": "tsk", "PEER": "peer-1", "DIR": "/repo", "P": ["src/a.py"], "B": "abc123",
-                 "SHA": "0123456789abcdef0123456789abcdef01234567", "$PASEO_AGENT_ID": "lead-1",
-                 "LEAD": "lead-1", "OLD": "lead-1", "NEW": "lead-2", "opt:--evidence": "ev1"}
+                 "SHA": "0123456789abcdef0123456789abcdef01234567", "R": "lead-1",
+                 "LEAD": "lead-1", "OLD": "lead-1", "NEW": "lead-2", "opt:--evidence": "ev1",
+                 "H": hashlib.sha256(b"snapshot\n").hexdigest(), "F": pf}
 
             def go(who, argv, ok=True):
                 rc, out = self._call(jp, who, jbin, argv)
                 self.assertEqual(rc == 0, ok, (argv, rc, out))
                 return out
 
+            def cid_from(out):
+                return re.search(r"cid=(\w+)", out).group(1)
+
             go("lead-1", self._bind(cmds["brief"], v))
-            out = go("peer-1", self._bind(pcmds["candidate"], v, opts=("--evidence",)))
-            cid = re.search(r"cid=(\w+)", out).group(1)
+            cid = cid_from(go("peer-1", self._bind(pcmds["candidate"], v, opts=("--evidence",))))
             v.update({"C": cid, "T": "tsk-rev", "PEER": "rev-1"})
             go("lead-1", self._bind(cmds["brief-review"], v))
             go("rev-1", self._bind(pcmds["review"], v))
@@ -1261,17 +1269,29 @@ class RenderedPromptTests(unittest.TestCase):
             go("lead-1", self._bind(cmds["accept"], v))
             self.assertIn("clean", go("lead-1", self._bind(cmds["done-check"], v)))
 
-            v["T"], v["PEER"], v["P"], v["$PASEO_AGENT_ID"] = "tsk2", "peer-2", ["src/b.py"], "lead-2"
+            # An OPEN snapshot candidate (patch variant of the candidate line) when the Lead is replaced.
+            v.update({"T": "tskb", "PEER": "peer-b", "P": ["src/c.py"]})
+            go("lead-1", self._bind(cmds["brief"], v))
+            cidb = cid_from(go("peer-b", self._bind(pcmds["candidate"], v, pick=2)))
             go("lead-2", self._bind(ctl, v))
             st = json.loads(go("lead-2", ["state"]))
             t = st["tasks"]["tsk"]
             self.assertEqual((t["status"], t["owner"] or t["lastOwner"], t["writeScope"]["paths"], t["acceptedCandidate"]),
                              ("ACCEPTED", "peer-1", ["src/a.py"], cid))
+            tb = st["tasks"]["tskb"]
+            self.assertEqual((tb["status"], tb["owner"], tb["writeScope"]["paths"], tb["currentCandidate"]),
+                             ("CANDIDATE_READY", "peer-b", ["src/c.py"], cidb))
             self.assertEqual(st["roomLeads"]["lead-1"], "lead-2")
+            # The new Lead finishes the loop with the exact rendered lines; R stays the recovered room id.
+            v.update({"C": cidb, "T": "tskb-rev", "PEER": "rev-2"})
+            go("lead-2", self._bind(cmds["brief-review"], v))
+            go("rev-2", self._bind(pcmds["review"], v))
+            v["T"] = "tskb"
+            go("lead-2", self._bind(cmds["accept"], v))
+            v.update({"T": "tsk2", "PEER": "peer-2", "P": ["src/b.py"]})
             go("lead-2", self._bind(cmds["brief"], v))
             v["PEER"] = "peer-3"
-            out = go("lead-2", self._bind(cmds["brief"], v), ok=False)
-            self.assertIn("task-exists", out)
+            self.assertIn("task-exists", go("lead-2", self._bind(cmds["brief"], v), ok=False))
             v["T"] = "tsk3"
             self.assertIn("scope-conflict", go("lead-2", self._bind(cmds["brief"], v), ok=False))
             v["T"] = "tsk2"

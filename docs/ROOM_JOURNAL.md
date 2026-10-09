@@ -182,8 +182,8 @@ is `not-coordinator` from then on, and a BRIEF over a held scope is `scope-confl
 `install.sh` creates `$ROOM_HOME/state/` (0700, never the journal or an existing one) and sets
 `SLP_JOURNAL=$ROOM_HOME/state/journal.jsonl` in the `claude-lead` and `claude-peer` provider env and in the
 `codex-peer` launcher. The Lead and Peer role prompts name the helper by the absolute path `install.sh` renders
-into their `@@SLP_JOURNAL@@` token. The Lead records BRIEF (after `create_agent`; `--room "$PASEO_AGENT_ID"` on
-every new task), its dispositions and control records, and runs `done-check` once before `DONE`; a Peer records
+into their `@@SLP_JOURNAL@@` token. The Lead records BRIEF (after `create_agent`; `--room R` on every new
+task, R = its own id, or the old Lead's id after a replacement), its dispositions and control records, and runs `done-check` once before `DONE`; a Peer records
 its CANDIDATE, REVIEW and blocking signals with the task id from its brief, in the same turn, before the signal
 message. Each is one short command, never polled; the journal is read back only (`state`, once) by a replacement
 Lead, which then records `control lead --from OLD --to NEW --room OLD`. The signal text stays the authoritative
