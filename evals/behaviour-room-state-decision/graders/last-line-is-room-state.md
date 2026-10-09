@@ -1,4 +1,4 @@
 ---
 type: regex
-pattern: '(?s)\n(?:❓ Waiting on you: )[^\n]+\s*\Z'
+pattern: '\n(?:❓ Waiting on you: )[^\n]+\s*(?![\s\S])'
 ---
