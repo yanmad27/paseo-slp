@@ -1184,7 +1184,7 @@ for (const { path, field, source } of regexes) {
     bad.push(`${path}: ${field} does not compile: ${e.message}`);
     continue;
   }
-  if (/\\[AZ]/.test(source)) bad.push(`${path}: ${field} uses \\A or \\Z, which JS reads as a literal letter`);
+  if (/(?<!\\)(?:\\\\)*\\[AZ]/.test(source)) bad.push(`${path}: ${field} uses \\A or \\Z, which JS reads as a literal letter`);
 }
 bad.forEach((b) => console.log(b));
 process.exit(bad.length ? 1 : 0);
