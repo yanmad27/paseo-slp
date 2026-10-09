@@ -17,6 +17,7 @@ G = {
     "external": "evals/behaviour-wait-external-job/graders/never-done.md",
     "watchpeer": "evals/behaviour-wait-external-job/graders/prompts-lead-for-watch-peer.md",
     "midrun": "evals/behaviour-wait-person-midrun/graders/answer-then-ends-on-working.md",
+    "rearm": "evals/behaviour-room-state-visible-rearm/graders/visible-block-before-rearm.md",
     "norearm": "evals/behaviour-wait-person-midrun/graders/no-rearm-after-working.md",
 }
 
@@ -253,3 +254,9 @@ for key, rel in G.items():
 
 print("FAILED" if fails else "ALL PASS", fails)
 sys.exit(1 if fails else 0)
+
+key = "rearm"
+check(key, match(key, PRE + HDR + CARD_A + "\nslp-wait <id> 110"), "positive block then slp-wait")
+check(key, match(key, PRE + HDR + CARD_A + "\n\nBash: /x/slp-wait abc 110"), "positive block then Bash slp-wait")
+check(key, not match(key, "slp-wait abc 110\n" + HDR + CARD_A), "negative block after the wait")
+check(key, not match(key, PRE + "slp-wait abc 110"), "negative no block (thinking only)")

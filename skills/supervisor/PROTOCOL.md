@@ -191,7 +191,7 @@ doing or its state>` row per Lead with one `🦾 <short Peer name> · <what it i
 doing>` row per running or permission-pending Peer nested under it, indented
 with the literal ASCII text `&emsp;&ensp;` before each 🦾 row (🤖 rows have no indent), no blank lines, never in a code fence) only after
 answering the person mid-run, when `slp-wait` failed, or in the external-job fallback below; `🕒 Working` otherwise precedes each
-`slp-wait` and never ends a turn (see its role). The
+`slp-wait` as visible assistant text (never only thinking), on every re-arm, and never ends a turn (see its role). The
 person always sees the state, and no turn ends on a bare acknowledgement.
 For example:
 

@@ -214,8 +214,9 @@ space. Never indent with ASCII spaces, tabs, or raw Unicode spaces (the chat
 strips them), and never put the block in a code fence (it would show the
 entities literally). Keep every row consecutive. Copy the example below
 character for character (the fence below is only for this document).
-`🕒` is printed right before
-each `slp-wait`, so the latest visible text plus the spinner shows the state.
+Write `🕒` as visible assistant text
+(never only thinking) right before EVERY `slp-wait`, each re-arm included, so
+the latest visible text plus the spinner shows the state.
 A turn that ends stops spinning, so it ends on `🕒` only in the three cases above.
 Rendered:
 
@@ -236,8 +237,8 @@ Rendered:
 turn does. `SLP_WAIT` is `@@SLP_WAIT@@`, the installed helper's absolute
 path. If that path still begins with `@@` (the install-time placeholder was
 never replaced), you are outside the installed room: do not run it, fall
-back (below). After launching or prompting a Lead, print the 🕒
-state, then Bash `SLP_WAIT <id> 110` with the Bash `timeout` parameter 140000,
+back (below). After launching or prompting a Lead, write the 🕒
+state as visible text, then Bash `SLP_WAIT <id> 110` with the Bash `timeout` parameter 140000,
 on whichever room agent is running now: a running Lead first, else a running
 Peer of one of your Leads (observation only — never direct a Peer). With
 several Leads, wait on whichever runs. 110 s keeps a room inspection at least
@@ -251,7 +252,8 @@ return — `timeout`, `idle`, `permission`, `error`, or an interruption:
 3. Handle each event exactly once — a Lead report or permission; a wait
    return and a finish notification for the same turn are one event. If the
    person messaged: go to the person exception below, and do not re-arm.
-4. For every other event: print the room-state block, pick the next running
+4. For every other event: write the room-state block as visible text (heartbeat
+   wakes and post-inspection re-arms too), pick the next running
    room agent, and re-arm.
 - Handoff: when a Peer finishes, its Lead is woken by a notification within
   seconds. If at re-inspection nothing in the room runs but a Lead's latest

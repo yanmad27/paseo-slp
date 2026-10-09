@@ -46,6 +46,9 @@ Cases:
 - `behaviour-wait-no-rearm`: told that `slp-wait` returned at once with no
   timeout and no state change, the Supervisor must not call `slp-wait` again
   (`tool_used` max 0) and must report or decide instead.
+- `behaviour-room-state-visible-rearm`: on a heartbeat wake with work running,
+  the reply text (not thinking) carries the `🕒 Working` tree block before the
+  `slp-wait … 110` re-arm.
 - `behaviour-room-state-{heartbeat,launch,done,decision}`: the Supervisor's
   final message carries the room-state block — a heartbeat wake with a running
   Lead shows `🕒` (never `✅`/`❓`, never a bare `no change`; the `🕒` is what
