@@ -172,10 +172,13 @@ it uses the checkout.
 
 ## Paseo configuration
 
-`install.sh` writes eight agent profiles and three providers into
-`~/.paseo/config.json`. Every Lead and Peer seat runs with full permissions
-(Claude `bypassPermissions`, Codex `full-access`); reviewers are read-only
-because their brief says so. Thinking: Supervisor high, Lead medium,
+`install.sh` writes eight agent profiles and six providers into
+`~/.paseo/config.json`. Every Lead and writable Peer seat runs with full permissions
+(Claude `bypassPermissions`, Codex `full-access`). `Review peer` and `Codex review peer`
+run on `claude-reviewer` / `codex-reviewer`, whose runtimes attempt to restrict
+writes, network and credentials; nothing counts as enforced until you run
+`~/.config/slp-room/bin/slp-reviewer-check` ([docs/REVIEWER_SANDBOX.md](docs/REVIEWER_SANDBOX.md)),
+and their briefs still say read-only. Thinking: Supervisor high, Lead medium,
 review peers medium, every other Peer low.
 
 | Profile | Provider | Model | Mode | Use for |

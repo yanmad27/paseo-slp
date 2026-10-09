@@ -253,16 +253,26 @@ else
   fail 'Supervisor must use provider "claude-supervisor" and Lead "claude-lead"'
 fi
 
-if jq -e '[.daemon.agentProfiles[] | select(.name | test("[Pp]eer$")) | select(.name | startswith("Codex") | not) | .provider] | length == 4 and all(. == "claude-peer")' "$SNIPPET" >/dev/null; then
-  ok 'all four Claude Peer profiles use provider "claude-peer"'
+if jq -e '[.daemon.agentProfiles[] | select(.name | test("[Pp]eer$")) | select(.name | startswith("Codex") or . == "Review peer" | not) | .provider] | length == 3 and all(. == "claude-peer")' "$SNIPPET" >/dev/null; then
+  ok 'the three writable Claude Peer profiles (Cheap peer, Peer, Expensive peer) use provider "claude-peer"'
 else
-  fail 'every Claude Peer profile (Cheap peer, Peer, Expensive peer, Review peer) must use provider "claude-peer"'
+  fail 'every writable Claude Peer profile (Cheap peer, Peer, Expensive peer) must use provider "claude-peer"'
 fi
 
-if jq -e '[.daemon.agentProfiles[] | select(.name | startswith("Codex")) | .provider] | length == 2 and all(. == "codex-peer")' "$SNIPPET" >/dev/null; then
-  ok 'both Codex Peer profiles use provider "codex-peer"'
+if jq -e '[.daemon.agentProfiles[] | select(.name == "Codex peer") | .provider] == ["codex-peer"]' "$SNIPPET" >/dev/null; then
+  ok 'Codex peer (writable) uses provider "codex-peer"'
 else
-  fail 'every Codex profile (Codex peer, Codex review peer) must use provider "codex-peer"'
+  fail 'Codex peer must use provider "codex-peer"'
+fi
+
+# Reviewer seats: dedicated restricted providers, not a full-access mode, and notes that claim no enforcement.
+if jq -e '(.daemon.agentProfiles | map({(.name): .}) | add) as $r
+    | $r["Review peer"].provider == "claude-reviewer" and $r["Codex review peer"].provider == "codex-reviewer"
+    and $r["Review peer"].modeId != "bypassPermissions" and $r["Codex review peer"].modeId != "full-access"
+    and ([$r["Review peer"].notes, $r["Codex review peer"].notes] | all(test("slp-reviewer-check") and test("unverified") and (test("[Ee]nforced") | not)))' "$SNIPPET" >/dev/null; then
+  ok 'Review peer / Codex review peer use claude-reviewer / codex-reviewer, a non-full-access mode, and notes that point to slp-reviewer-check without claiming enforcement'
+else
+  fail 'Review peer must use claude-reviewer and Codex review peer codex-reviewer with a non-full-access modeId and notes that name slp-reviewer-check and "unverified" and never claim enforcement'
 fi
 
 if jq -e '.daemon.agentProfiles | all(has("provider") and has("model") and has("modeId"))' "$SNIPPET" >/dev/null; then
@@ -283,12 +293,12 @@ else
   fail "agent profile ids are not unique"
 fi
 
-# Every Lead and Peer seat runs with full permissions; read-only reviewers are read-only by brief.
-if jq -e '[.daemon.agentProfiles[] | select(.name != "Supervisor")]
+# Every Lead and writable Peer seat runs with full permissions; reviewer seats run restricted providers.
+if jq -e '[.daemon.agentProfiles[] | select(.name != "Supervisor" and (.name | test("^(Codex )?[Rr]eview peer$") | not))]
     | all(if .provider == "codex-peer" then .modeId == "full-access" else .modeId == "bypassPermissions" end)' "$SNIPPET" >/dev/null; then
-  ok 'every Lead/Peer profile runs full access (Claude bypassPermissions, Codex full-access)'
+  ok 'every Lead/writable Peer profile runs full access (Claude bypassPermissions, Codex full-access)'
 else
-  fail 'every Lead/Peer profile must run full access: Claude bypassPermissions, Codex full-access'
+  fail 'every Lead/writable Peer profile must run full access: Claude bypassPermissions, Codex full-access'
 fi
 
 # Claude seats run in their own runtime (CLAUDE_CONFIG_DIR) sharing one token; Codex through a launcher.
@@ -322,7 +332,7 @@ else
 fi
 
 # Peers talk back to their Lead (send_agent_prompt) but must not spawn or control agents.
-for pair in claude-peer:claude codex-peer:codex; do
+for pair in claude-peer:claude codex-peer:codex claude-reviewer:claude codex-reviewer:codex; do
   prov="${pair%%:*}" base="${pair#*:}"
   if jq -e --arg p "$prov" --arg b "$base" '.agents.providers[$p] as $x
       | $x.extends == $b and ($x.paseoTools.enabled != false)
@@ -406,7 +416,7 @@ if HOME="$MIGRATE_HOME" "$REPO_ROOT/install.sh" --paseo-only --no-reload >/dev/n
   if jq -e --slurpfile snip "$SNIPPET" '
       ([.daemon.agentProfiles[].name] | sort) == (["Mine"] + [$snip[0].daemon.agentProfiles[].name] | sort)
       and ([.daemon.agentProfiles[] | select(.name == "Lead") | .model] == ["claude-opus-5-5"])
-      and (.agents.providers | keys | sort) == ["claude-lead", "claude-peer", "claude-supervisor", "codex-peer", "mine-provider"]
+      and (.agents.providers | keys | sort) == ["claude-lead", "claude-peer", "claude-reviewer", "claude-supervisor", "codex-peer", "codex-reviewer", "mine-provider"]
       and .agents.providers["claude-peer"].paseoTools == $snip[0].agents.providers["claude-peer"].paseoTools' \
       "$MIGRATE_HOME/.paseo/config.json" >/dev/null; then
     ok "install.sh --paseo-only migrates a v1 config, resets managed entries, and keeps the user's own"
@@ -784,7 +794,7 @@ mkdir -p "$ALIAS_HOME"
 if HOME="$ALIAS_HOME" SLP_CLAUDE_BASE_URL=https://gateway.example.com SLP_CLAUDE_API_KEY="k e y" \
     "$REPO_ROOT/install.sh" --paseo-only --no-reload >/dev/null 2>&1 \
   && jq -e '[.agents.providers | to_entries[] | select(.key | startswith("claude-")) | .value.env
-      | .ANTHROPIC_AUTH_TOKEN == "k e y"] | length == 3 and all' "$ALIAS_HOME/.paseo/config.json" >/dev/null \
+      | .ANTHROPIC_AUTH_TOKEN == "k e y"] | length == 4 and all' "$ALIAS_HOME/.paseo/config.json" >/dev/null \
   && ! HOME="$TMP/home-endpoint-both" SLP_CLAUDE_BASE_URL=https://gateway.example.com SLP_CLAUDE_API_KEY=a \
     SLP_CLAUDE_AUTH_TOKEN=b "$REPO_ROOT/install.sh" --paseo-only --no-reload >/dev/null 2>&1; then
   ok "install.sh still accepts SLP_CLAUDE_API_KEY as an alias and refuses two different keys"
@@ -1457,6 +1467,96 @@ if [ "$(command -v launchctl)" = "$LAUNCHCTL_STUB_DIR/launchctl" ] && [ "$SLP_LA
   ok "launchctl resolves to the stub on PATH and SLP_LAUNCHCTL is the stub"
 else
   fail "launchctl or SLP_LAUNCHCTL no longer points at the stub"
+fi
+
+# --- reviewer seats: static checks only (CI starts no claude/codex; slp-reviewer-check probes the runtime) ---
+RV="$RENDER_HOME/.config/slp-room"
+RV_OK=1
+jq -e --arg room "$RV" '.sandbox as $s | .permissions as $p
+    | $s.enabled == true and $s.allowUnsandboxedCommands == false and $s.failIfUnavailable == true
+    and $s.autoAllowBashIfSandboxed == true and $s.network.allowedDomains == [] and ($s | has("excludedCommands") | not)
+    and ($s.filesystem.denyWrite | index($room | split("/.config/")[0]) != null)
+    and ($s.filesystem | has("allowWrite") | not)
+    and ($p.allow | index("Skill") != null and index("Grep") != null and index("Glob") != null and index("TaskStop") != null)
+    and ($p.allow | any(.[]; startswith("Edit(//")))
+    and ($p.deny | index("Read(/" + ($room | split("/.config/")[0]) + "/.paseo/config.json)") != null)
+    and ($p.deny | index("Read(/" + ($room | split("/.config/")[0]) + "/.claude.json)") != null)
+    and (has("hooks") | not) and (has("statusLine") | not) and (.enabledPlugins == {})
+    and ($s.credentials.files | all(.mode == "deny") and length >= 5)
+    and ($s.credentials.envVars | map(.name) | index("GH_TOKEN") != null)
+    and ($p.deny | index("WebFetch") != null and index("WebSearch") != null and index("Bash(git push:*)") != null
+         and any(.[]; startswith("Edit(//")))
+    and ($p.allow | any(.[]; test("^Bash")) | not)
+    and $p.disableBypassPermissionsMode == "disable" and $p.defaultMode == "default"
+    and .outputStyle == "slp-reviewer"' \
+  "$RV/claude-reviewer/settings.json" >/dev/null || { RV_OK=0; echo "  rendered claude-reviewer settings lack the sandbox/deny keys"; }
+# The user's looser settings must not survive in the reviewer runtime (deny/sandbox win, allow rules and excludedCommands dropped).
+jq -e '.permissions.allow | index("Bash(rm:*)") == null and index("Edit(/**)") == null' "$RV/claude-reviewer/settings.json" >/dev/null \
+  || { RV_OK=0; echo "  user Bash/Edit allow rules survived in the reviewer settings"; }
+[ "$(stat -c %a "$RV/claude-reviewer/settings.json" 2>/dev/null || stat -f %Lp "$RV/claude-reviewer/settings.json")" = "600" ] || { RV_OK=0; echo "  reviewer settings.json is not mode 600"; }
+# A user settings file with hooks, an mcp allow rule, secrets in env and a relative SLP_REVIEWER_DENY_WRITE entry.
+RVH="$TMP/home-rv"; rm -rf "$RVH"; mkdir -p "$RVH/.claude"
+printf '{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"x"}]}]},"statusLine":{"type":"command","command":"y"},"permissions":{"allow":["mcp__evil__write","Bash(rm:*)"]},"env":{"GH_TOKEN":"t","AWS_SECRET_ACCESS_KEY":"s","LANG":"C"}}\n' > "$RVH/.claude/settings.json"
+if HOME="$RVH" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1 \
+  && jq -e '(has("hooks") | not) and (has("statusLine") | not) and (.env == {"LANG": "C"})
+      and (.permissions.allow | index("mcp__evil__write") == null and index("Bash(rm:*)") == null and index("mcp__paseo__send_agent_prompt") != null)' \
+    "$RVH/.config/slp-room/claude-reviewer/settings.json" >/dev/null \
+  && jq -e 'has("hooks")' "$RVH/.config/slp-room/claude-peer/settings.json" >/dev/null; then :; else RV_OK=0; echo "  reviewer runtime kept inherited hooks/statusLine/env/mcp allows, or the Peer runtime lost them"; fi
+if HOME="$RVH" SLP_REVIEWER_DENY_WRITE="relative/path" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1; then RV_OK=0; echo "  a relative SLP_REVIEWER_DENY_WRITE entry was accepted"; fi
+# Fail closed: an aborted re-install must leave the reviewer settings restricted (or absent), never the raw user settings.
+rv_restricted() { [ ! -e "$RVH/.config/slp-room/claude-reviewer/settings.json" ] || jq -e '.sandbox.enabled == true and (has("hooks") | not)' "$RVH/.config/slp-room/claude-reviewer/settings.json" >/dev/null 2>&1; }
+rv_restricted || { RV_OK=0; echo "  reviewer settings not restricted after a good install and a rejected SLP_REVIEWER_DENY_WRITE"; }
+chmod a-w "$RVH/.config/slp-room/claude-reviewer"
+if HOME="$RVH" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1; then :; fi
+chmod u+w "$RVH/.config/slp-room/claude-reviewer"
+rv_restricted || { RV_OK=0; echo "  an aborted re-install left raw (unrestricted) reviewer settings"; }
+# A render failure (invalid-type permissions.deny) keeps the previous restricted file byte-identical and leaves no staging file.
+RVS="$RVH/.config/slp-room/claude-reviewer"; RV_SUM="$(sha256_of "$RVS/settings.json")"
+printf '{"permissions":{"deny":"invalid-type"}}\n' > "$RVH/.claude/settings.json"
+if HOME="$RVH" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1; then RV_OK=0; echo "  an invalid-type reviewer render did not abort"; fi
+[ "$(sha256_of "$RVS/settings.json")" = "$RV_SUM" ] || { RV_OK=0; echo "  a failed render changed the previous restricted reviewer settings"; }
+[ -z "$(find "$RVS" -maxdepth 1 -name 'settings.json.*')" ] || { RV_OK=0; echo "  a failed render left staging files"; }
+# First install failing: a deny-all stub (mode 600), never an absent or raw file.
+RVF="$TMP/home-rv-first"; rm -rf "$RVF"; mkdir -p "$RVF/.claude"
+cp "$RVH/.claude/settings.json" "$RVF/.claude/settings.json"
+if HOME="$RVF" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1; then RV_OK=0; echo "  a first install with invalid reviewer input did not abort"; fi
+RVFS="$RVF/.config/slp-room/claude-reviewer/settings.json"
+{ [ -f "$RVFS" ] && [ "$(stat -c %a "$RVFS" 2>/dev/null || stat -f %Lp "$RVFS")" = "600" ] \
+  && jq -e '.sandbox.enabled == true and .sandbox.allowUnsandboxedCommands == false and .sandbox.failIfUnavailable == true
+      and (.permissions.deny | index("Bash") != null and index("Edit") != null and index("Write") != null and index("WebFetch") != null and index("WebSearch") != null)' "$RVFS" >/dev/null; } \
+  || { RV_OK=0; echo "  a first-install render failure did not leave a deny-all stub at mode 600"; }
+grep -q 'Room role: Peer' "$RV/claude-reviewer/output-styles/slp-reviewer.md" || { RV_OK=0; echo "  reviewer output style lacks the Peer role"; }
+jq -e '.agents.providers as $p
+    | $p["claude-reviewer"].env.CLAUDE_CONFIG_DIR == $room + "/claude-reviewer"
+    and $p["claude-reviewer"].env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB == "1"
+    and ($p["claude-reviewer"].env | keys) == (($p["claude-peer"].env | keys) + ["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] | sort)
+    and ($p["claude-reviewer"].disallowedTools | sort) == ($p["claude-peer"].disallowedTools | sort)
+    and ($p["claude-reviewer"].paseoTools == $p["claude-peer"].paseoTools)
+    and ($p["codex-reviewer"].command == [$room + "/bin/codex-reviewer"])' --arg room "$RV" "$RENDER_HOME/.paseo/config.json" >/dev/null \
+  || { RV_OK=0; echo "  claude-reviewer must keep the Peer spawner/slp-wait denies and paseoTools and add SUBPROCESS_ENV_SCRUB; codex-reviewer must use its launcher"; }
+L="$RV/bin/codex-reviewer"
+{ grep -qF -- "-c 'sandbox_mode=\"read-only\"'" "$L" && grep -qF -- "-c 'approval_policy=\"never\"'" "$L" \
+  && grep -qF "shell_environment_policy.inherit=\"core\"" "$L" && grep -qF "CODEX_HOME=\"$RV/codex-reviewer\"" "$L" \
+  && ! grep -qE 'danger-full-access|workspace-write|bypass' "$L" \
+  && grep -q 'decision = "forbidden"' "$RV/codex-reviewer/rules/room.rules"; } || { RV_OK=0; echo "  codex-reviewer launcher lacks read-only/never/core env, or the spawner rules"; }
+CHECK="$RV/bin/slp-reviewer-check"
+{ [ -x "$CHECK" ] && [ "$(stat -c %a "$CHECK" 2>/dev/null || stat -f %Lp "$CHECK")" = "755" ] && cmp -s paseo/bin/slp-reviewer-check "$CHECK"; } \
+  || { RV_OK=0; echo "  slp-reviewer-check is not installed 0755"; }
+DRY_OUT="$(PATH="/usr/bin:/bin" "$CHECK" --dry-run 2>&1)" || { RV_OK=0; echo "  slp-reviewer-check --dry-run failed"; }
+for id in tool redirect script symlink tmp push net tcp gh cred-files cred-env journal no-prompt repo-settings cx-redirect cx-tool cx-push cx-tcp cx-cred-env; do
+  grep -q "PLAN [a-z]* $id " <<< "$DRY_OUT" || { RV_OK=0; echo "  dry-run plan lacks row $id"; }
+done
+SELF_OUT="$(PATH="/usr/bin:/bin:$PATH" "$CHECK" --self-test 2>&1)" || { RV_OK=0; echo "  slp-reviewer-check --self-test failed: $(grep FAIL <<< "$SELF_OUT" | head -3)"; }
+grep -qE '^(PASS|FAIL|ENFORCED)' <<< "$DRY_OUT" && { RV_OK=0; echo "  dry-run printed a result line"; }
+if [ "$RV_OK" = 1 ]; then
+  ok "reviewer seats: rendered claude-reviewer sandbox/deny keys, codex-reviewer read-only launcher, Peer spawner denies intact, slp-reviewer-check installed 0755 and --dry-run lists every probe (static only)"
+else
+  fail "reviewer seat rendering or slp-reviewer-check wiring is wrong"
+fi
+if shellcheck -S warning paseo/bin/slp-reviewer-check 2>/dev/null || ! command -v shellcheck >/dev/null 2>&1; then
+  ok "slp-reviewer-check passes shellcheck -S warning (or shellcheck is not installed)"
+else
+  fail "slp-reviewer-check has shellcheck warnings"
 fi
 
 if [ "$FAILED" -ne 0 ]; then

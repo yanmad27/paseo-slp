@@ -143,7 +143,23 @@ fi
 
 WORK="$(mktemp -d)"
 AUTH_TMP=""
-trap 'rm -rf "$WORK"; [ -z "$AUTH_TMP" ] || rm -f "$AUTH_TMP"' EXIT
+# While a reviewer runtime is being rendered (RV_RT set), any exit removes the staging files and, unless a
+# restricted settings.json already exists, installs a deny-all stub: a failed render never leaves the seat
+# without a policy and never deletes the previous restricted file.
+RV_RT=""
+reviewer_failsafe() {
+  [ -n "$RV_RT" ] || return 0
+  rm -f "$RV_RT/settings.json.new" "$RV_RT/settings.json.new.tmp" "$RV_RT/settings.json.tmp" 2>/dev/null || true
+  if ! jq -e '.sandbox.enabled == true and .sandbox.allowUnsandboxedCommands == false' "$RV_RT/settings.json" >/dev/null 2>&1; then
+    ( umask 077
+      printf '%s\n' '{"outputStyle":"slp-reviewer","permissions":{"defaultMode":"default","disableBypassPermissionsMode":"disable","deny":["Edit","Write","NotebookEdit","MultiEdit","Bash","WebFetch","WebSearch"]},"sandbox":{"enabled":true,"allowUnsandboxedCommands":false,"failIfUnavailable":true,"autoAllowBashIfSandboxed":false,"network":{"allowedDomains":[]},"filesystem":{"denyWrite":["/"]}}}' > "$RV_RT/settings.json.stub" \
+        && mv -f "$RV_RT/settings.json.stub" "$RV_RT/settings.json" ) 2>/dev/null || true
+    rm -f "$RV_RT/settings.json.stub" 2>/dev/null || true
+    echo "WARNING: the reviewer settings could not be rendered; $RV_RT/settings.json is a deny-all stub (or the previous restricted file) until a successful install." >&2
+  fi
+  RV_RT=""
+}
+trap 'rm -rf "$WORK"; [ -z "$AUTH_TMP" ] || rm -f "$AUTH_TMP"; reviewer_failsafe' EXIT
 
 # Source: this checkout, or the repository tarball when piped.
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ] \
@@ -694,6 +710,9 @@ if [ "$DO_PASEO" = 1 ]; then
   # @@SLP_WAIT@@ token is replaced with it. Only the Supervisor waits; Leads and Peers are denied.
   cp "$SRC/paseo/bin/slp-wait" "$ROOM_HOME/bin/slp-wait"
   chmod 755 "$ROOM_HOME/bin/slp-wait"
+  # slp-reviewer-check: the reviewer sandbox self-check. Installed only; neither this script nor CI runs it.
+  cp "$SRC/paseo/bin/slp-reviewer-check" "$ROOM_HOME/bin/slp-reviewer-check"
+  chmod 755 "$ROOM_HOME/bin/slp-reviewer-check"
   # slp-journal: stdlib-Python message-envelope + journal helper. Needs python3 >= 3.9; without it
   # the helper is skipped with a warning (the install does not fail). Journals are never created here.
   if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
@@ -732,12 +751,31 @@ if [ "$DO_PASEO" = 1 ]; then
       | sed "s|@@SLP_WAIT@@|$SLP_WAIT_SED|g"  # drop the frontmatter
   } > "$ROOM_HOME/supervisor.md"
 
-  for role in supervisor lead peer; do
+  # The reviewer's inputs are validated before any runtime file is written, so a bad value aborts with the
+  # previous (restricted) reviewer settings untouched.
+  REVIEWER_DENY=("$HOME")
+  if [ -n "${SLP_REVIEWER_DENY_WRITE:-}" ]; then
+    IFS=: read -r -a REVIEWER_EXTRA <<< "$SLP_REVIEWER_DENY_WRITE"
+    for extra in "${REVIEWER_EXTRA[@]}"; do
+      case "$extra" in
+        /*) REVIEWER_DENY+=("$extra") ;;
+        "") ;;
+        *) echo "ERROR: SLP_REVIEWER_DENY_WRITE entries must be absolute paths (got '$extra')." >&2; exit 1 ;;
+      esac
+    done
+  fi
+  REVIEWER_DENY_JSON="$(jq -cn '$ARGS.positional | unique' --args "${REVIEWER_DENY[@]}")"
+  for role in supervisor lead peer reviewer; do
     RUNTIME="$ROOM_HOME/claude-$role"
+    # The reviewer's settings are rendered to a side file and moved into place only after the restricted
+    # merge succeeds: an aborted install can never leave the raw user settings under the seat.
+    SETTINGS_OUT="$RUNTIME/settings.json"
+    if [ "$role" = reviewer ]; then SETTINGS_OUT="$RUNTIME/settings.json.new"; RV_RT="$RUNTIME"; RV_UMASK="$(umask)"; umask 077; fi
+    PROMPT_ROLE="$role"; [ "$role" != reviewer ] || PROMPT_ROLE=peer  # the reviewer seat runs the Peer prompt
     mkdir -p "$RUNTIME/output-styles" "$RUNTIME/skills"
     {
       printf -- '---\nname: slp-%s\ndescription: Supervisor → Lead → Peer room, %s seat\nkeep-coding-instructions: true\n---\n\n' "$role" "$role"
-      cat "$ROOM_HOME/$role.md"
+      cat "$ROOM_HOME/$PROMPT_ROLE.md"
     } > "$RUNTIME/output-styles/slp-$role.md"
 
     # The user's settings, with the seat's output style, and without this plugin: no seat
@@ -770,7 +808,7 @@ if [ "$DO_PASEO" = 1 ]; then
         else . end
       | .enabledPlugins = ((.enabledPlugins // {})
           | with_entries(if (.key | test("^(paseo-slp|orchestrate)@")) then .value = false else . end))
-    ' > "$RUNTIME/settings.json"
+    ' > "$SETTINGS_OUT"
     if [ "$JEV" = 0 ]; then
       # Jev off, seats only: ask-jev disabled, its hooks removed, and the unfiltered ~/.claude/CLAUDE.md excluded from the ancestor walk; the user's own settings.json is only read.
       jq --arg md "$CLAUDE_HOME/CLAUDE.md" '
@@ -781,7 +819,7 @@ if [ "$DO_PASEO" = 1 ]; then
         | if (.permissions | type) == "object" and (.permissions.allow | type) == "array" then
             .permissions.allow |= map(select((type == "string" and test("jev"; "i")) | not))
           else . end
-      ' "$RUNTIME/settings.json" > "$RUNTIME/settings.json.tmp"
+      ' "$SETTINGS_OUT" > "$SETTINGS_OUT.tmp"
       jq '
         if (.hooks | type) == "object" then
           .hooks |= (
@@ -794,11 +832,55 @@ if [ "$DO_PASEO" = 1 ]; then
               else . end))
             | with_entries(select((.value | type) != "array" or (.value | length) > 0)))
         else . end
-      ' "$RUNTIME/settings.json.tmp" > "$RUNTIME/settings.json"
-      rm -f "$RUNTIME/settings.json.tmp"
+      ' "$SETTINGS_OUT.tmp" > "$SETTINGS_OUT"
+      rm -f "$SETTINGS_OUT.tmp"
+    fi
+
+    if [ "$role" = reviewer ]; then
+      # Restriction keys, merged last so they win over the user's settings: deny rules beat allow rules, the
+      # sandbox block is replaced (no excludedCommands, no allowWrite, no unsandboxed retry), the user's
+      # Bash/Edit/Write and non-paseo mcp__ allow rules, hooks, statusLine, credential helpers, MCP server lists
+      # and most env are dropped. Writes under $HOME (the launch cwd is writable by default and the docs have no
+      # cwd-relative form in user settings) and under SLP_REVIEWER_DENY_WRITE are denied; the temp dir is outside
+      # $HOME on macOS and is the only place the Edit/Write tools may write. Doc-claimed: slp-reviewer-check probes it.
+      REVIEWER_TMP_JSON="$(jq -cn --arg t "$(cd -P "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P || echo /tmp)" '[$t, "/tmp", "/private/tmp"] | unique')"
+      jq --argjson dw "$REVIEWER_DENY_JSON" --argjson tmpd "$REVIEWER_TMP_JSON" --arg home "$HOME" --arg room "$ROOM_HOME" '
+        (["/.config/gh", "/.ssh", "/.aws", "/.netrc", "/.npmrc", "/.codex", "/.claude", "/.claude.json", "/.paseo/config.json"] | map($home + .)) as $homeCreds
+        | (["/auth", "/claude-supervisor", "/claude-lead", "/claude-peer", "/codex-peer", "/codex-reviewer"] | map($room + .)) as $roomCreds
+        | ($homeCreds + $roomCreds) as $credPaths
+        | (.permissions | if type == "object" then . else {} end) as $perm
+        | .permissions = ($perm
+            | del(.additionalDirectories)
+            | .defaultMode = "default"
+            | .disableBypassPermissionsMode = "disable"
+            | .allow = (((.allow // []) | map(select(type == "string" and (test("^(Bash|Edit|Write|NotebookEdit|MultiEdit|mcp__)") | not))))
+                + ["Read(//**)", "Grep", "Glob", "Skill", "TaskStop", "mcp__paseo__send_agent_prompt", "mcp__paseo__get_agent_status"]
+                + ($tmpd | map("Edit(/" + . + "/**)", "Write(/" + . + "/**)")) | unique)
+            | .deny = (((.deny // [])
+                + ["WebFetch", "WebSearch", "Bash(git push:*)", "Bash(gh:*)"]
+                + ($dw | map("Edit(/" + . + "/**)", "Write(/" + . + "/**)"))
+                + ($credPaths | map("Read(/" + . + ")", "Read(/" + . + "/**)"))) | unique))
+        | .sandbox = {
+            enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: true, autoAllowBashIfSandboxed: true,
+            filesystem: {denyWrite: $dw},
+            network: {allowedDomains: []},
+            credentials: {
+              files: ($credPaths | map({path: ., mode: "deny"})),
+              envVars: (["GH_TOKEN", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] | map({name: ., mode: "deny"}))}}
+        | del(.hooks, .statusLine, .apiKeyHelper, .awsAuthRefresh, .awsCredentialExport, .mcpServers, .enabledMcpjsonServers, .enableAllProjectMcpServers)
+        | .enabledPlugins = {}
+        | .env = ((.env // {}) | if type == "object" then with_entries(select(.key | test("^(LANG|LC_[A-Z]+|TZ|NO_COLOR|ANTHROPIC_(DEFAULT_[A-Z_]+_MODEL|MODEL|SMALL_FAST_MODEL))$"))) else {} end)
+        | if .env == {} then del(.env) else . end
+      ' "$SETTINGS_OUT" > "$RUNTIME/settings.json.tmp" \
+        && chmod 600 "$RUNTIME/settings.json.tmp" \
+        && mv "$RUNTIME/settings.json.tmp" "$RUNTIME/settings.json" \
+        && rm -f "$SETTINGS_OUT" \
+        || { echo "ERROR: could not render the reviewer sandbox settings; the previous restricted file is kept (or a deny-all stub written). Aborting." >&2; exit 1; }
+      RV_RT=""; umask "$RV_UMASK"
     fi
 
     for shared in plugins agents commands; do
+      [ "$role" != reviewer ] || { rm -f "$RUNTIME/$shared" 2>/dev/null; continue; }  # plugins can carry hooks that run outside the sandbox
       if [ -e "$CLAUDE_HOME/$shared" ] && { [ -L "$RUNTIME/$shared" ] || [ ! -e "$RUNTIME/$shared" ]; }; then
         ln -sfn "$CLAUDE_HOME/$shared" "$RUNTIME/$shared"
       fi
@@ -905,7 +987,30 @@ SLP_JOURNAL="$ROOM_HOME/state/journal.jsonl" CODEX_HOME="$CODEX_RT" exec "$CODEX
   -c "developer_instructions='''\$(cat "$ROOM_HOME/peer.md")'''" "\$@"
 LAUNCHER
   chmod +x "$ROOM_HOME/bin/codex-peer"
+  # The Codex reviewer: the Peer runtime and prompt, a read-only sandbox, approvals off (a blocked action fails
+  # instead of prompting), a core-only subprocess environment. Its CODEX_HOME copies the config and rules. A
+  # separate login is not something install.sh can create, so auth.json is linked like codex-peer's: the model
+  # can read the shared login (a limit, docs/REVIEWER_SANDBOX.md). Read-only means no temp-dir checks on Codex.
+  CODEX_RV="$ROOM_HOME/codex-reviewer"
+  mkdir -p "$CODEX_RV/rules"
+  [ ! -f "$CODEX_RT/config.toml" ] || cp "$CODEX_RT/config.toml" "$CODEX_RV/config.toml"
+  cp "$CODEX_RT/rules/room.rules" "$CODEX_RV/rules/room.rules"
+  for shared in auth.json AGENTS.md skills plugins; do
+    if [ -e "$CODEX_USER_HOME/$shared" ] && { [ -L "$CODEX_RV/$shared" ] || [ ! -e "$CODEX_RV/$shared" ]; }; then
+      ln -sfn "$CODEX_USER_HOME/$shared" "$CODEX_RV/$shared"
+    fi
+  done
+  cat > "$ROOM_HOME/bin/codex-reviewer" <<LAUNCHER
+#!/bin/sh
+# Generated by install.sh: Codex in the room's reviewer runtime — the Peer role as developer instructions,
+# sandbox_mode=read-only, approval_policy=never, a core-only subprocess environment, native sub-agents off.
+# Doc-claimed only: run slp-reviewer-check to probe it.
+SLP_JOURNAL="$ROOM_HOME/state/journal.jsonl" CODEX_HOME="$CODEX_RV" exec "$CODEX_BIN" -c 'sandbox_mode="read-only"' -c 'approval_policy="never"' -c 'shell_environment_policy.inherit="core"' -c agents.enabled=false -c features.multi_agent=false -c $V2_OFF \\
+  -c "developer_instructions='''\$(cat "$ROOM_HOME/peer.md")'''" "\$@"
+LAUNCHER
+  chmod +x "$ROOM_HOME/bin/codex-reviewer"
   echo "Rendered room runtimes and prompts: $ROOM_HOME"
+  echo "Reviewer seats are configured to restrict writes, network and credentials, but nothing is verified yet: run $ROOM_HOME/bin/slp-reviewer-check"
 
   # --- 3. Paseo config ------------------------------------------------------------
 
@@ -941,6 +1046,7 @@ LAUNCHER
         else . end)
     | .agents.providers["claude-lead"].disallowedTools += $leadAbs + $noWait
     | .agents.providers["claude-peer"].disallowedTools += $leadAbs + $noWait
+    | .agents.providers["claude-reviewer"].disallowedTools += $leadAbs + $noWait
     | .agents.providers["claude-supervisor"].disallowedTools += $supAbs
   ' "$SRC/paseo/config.snippet.json" > "$WORK/snippet.json"
 

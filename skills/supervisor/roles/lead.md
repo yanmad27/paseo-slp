@@ -147,8 +147,8 @@ Tier order:
    invariants, subtle bugs; only via escalation.
 <!-- jev:end -->
 "Review peer" (Sonnet 5.5, medium thinking) is the read-only seat for reviews; it is not a rung on
-this ladder. Every room seat runs with full permissions, so read-only is
-whatever the brief says: every read-only brief says "read-only — do not
+this ladder. Reviewer seats run restricted providers (enforced only as
+`slp-reviewer-check` reports); every read-only brief still says "read-only — do not
 modify files" and ends with the COMMITTEE no-edit suffix, verbatim.
 
 Codex Peers run another model family on the `codex-peer` provider. They are
@@ -157,7 +157,7 @@ not rungs on the ladder, and Jev does not pick them:
 <!-- jev:off -->
 not rungs on the ladder:
 <!-- jev:end -->
-- "Codex review peer" — read-only by its brief: the cross-family reviewer
+- "Codex review peer" — read-only, restricted provider: the cross-family reviewer
   of Claude-written candidates, plan reviewer, committee member, and debate
   tie-breaker.
 - "Codex peer" — writable. Only when your instruction asks for Codex, or as
