@@ -297,8 +297,8 @@ if jq -e '.agents.providers as $p
     and $p["claude-supervisor"].env == {"CLAUDE_CONFIG_DIR": "@@ROOM_HOME@@/claude-supervisor", "CLAUDE_CODE_OAUTH_TOKEN": "@@CLAUDE_OAUTH_TOKEN@@"}
     and ($p["claude-supervisor"] | has("paseoTools") | not)
     and $p["claude-lead"].extends == "claude"
-    and $p["claude-lead"].env == {"CLAUDE_CONFIG_DIR": "@@ROOM_HOME@@/claude-lead", "CLAUDE_CODE_OAUTH_TOKEN": "@@CLAUDE_OAUTH_TOKEN@@"}
-    and $p["claude-peer"].env == {"CLAUDE_CONFIG_DIR": "@@ROOM_HOME@@/claude-peer", "CLAUDE_CODE_OAUTH_TOKEN": "@@CLAUDE_OAUTH_TOKEN@@"}
+    and $p["claude-lead"].env == {"CLAUDE_CONFIG_DIR": "@@ROOM_HOME@@/claude-lead", "SLP_JOURNAL": "@@ROOM_HOME@@/state/journal.jsonl", "CLAUDE_CODE_OAUTH_TOKEN": "@@CLAUDE_OAUTH_TOKEN@@"}
+    and $p["claude-peer"].env == {"CLAUDE_CONFIG_DIR": "@@ROOM_HOME@@/claude-peer", "SLP_JOURNAL": "@@ROOM_HOME@@/state/journal.jsonl", "CLAUDE_CODE_OAUTH_TOKEN": "@@CLAUDE_OAUTH_TOKEN@@"}
     and ($p["claude-lead"] | has("command") | not) and ($p["claude-peer"] | has("command") | not)
     and ($p["claude-lead"].paseoTools.disabledTools | index("create_agent") == null and index("create_heartbeat") != null)
     and $p["codex-peer"].command == ["@@ROOM_HOME@@/bin/codex-peer"]' "$SNIPPET" >/dev/null; then
@@ -471,7 +471,7 @@ if PATH="$RENDER_HOME/bin:$PATH" HOME="$RENDER_HOME" env -u CODEX_HOME "$REPO_RO
              and index("Bash(" + $bin + "/paseo:*)") == null)' "$RENDER_HOME/.paseo/config.json" >/dev/null \
     && [ "$(stat -c %a "$RENDER_HOME/.paseo/config.json" 2>/dev/null || stat -f %Lp "$RENDER_HOME/.paseo/config.json")" = "600" ] \
     && jq -e --arg dir "$ROOM" '.agents.providers["claude-lead"].env
-        == {"CLAUDE_CONFIG_DIR": ($dir + "/claude-lead"), "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test"}' \
+        == {"CLAUDE_CONFIG_DIR": ($dir + "/claude-lead"), "SLP_JOURNAL": ($dir + "/state/journal.jsonl"), "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test"}' \
       "$RENDER_HOME/.paseo/config.json" >/dev/null; then
     ok "install.sh renders the Claude runtimes, the Codex launcher, and a private config with the shared token"
   else
@@ -645,7 +645,7 @@ if jev_install "$JH" --jev >/dev/null 2>&1; then
     [ "$(readlink "$JROOM/$s/CLAUDE.md")" = "$JH/.claude/CLAUDE.md" ] || JEV_ON_OK=0
   done
   # byte-identity of the room copy of lead.md against the sources filtered for on
-  jevf_ref on "$REPO_ROOT/skills/supervisor/roles/lead.md" | cmp -s - "$JROOM/room/roles/lead.md" || JEV_ON_OK=0
+  jevf_ref on "$REPO_ROOT/skills/supervisor/roles/lead.md" | sed "s|@@SLP_JOURNAL@@|$JROOM/bin/slp-journal|g" | cmp -s - "$JROOM/room/roles/lead.md" || JEV_ON_OK=0
   if [ "$JEV_ON_OK" = 1 ]; then
     ok "install.sh --jev keeps Tier decision via ask-jev in prompts, ask-jev enabled with its hooks, and the seat CLAUDE.md symlinks"
   else
@@ -772,8 +772,10 @@ for form in bearer x-api-key; do
   if [ "$form" = bearer ]; then KEYVAR=ANTHROPIC_AUTH_TOKEN; else KEYVAR=ANTHROPIC_API_KEY; fi
   if HOME="$EP_HOME" SLP_CLAUDE_BASE_URL=https://gateway.example.com SLP_CLAUDE_AUTH_TOKEN="k e y" \
       SLP_CLAUDE_AUTH_HEADER="$form" "$REPO_ROOT/install.sh" --paseo-only --no-reload >/dev/null 2>&1 \
-    && jq -e --arg kv "$KEYVAR" '[.agents.providers | to_entries[] | select(.key | startswith("claude-")) | .value.env
-        | keys | sort == (["ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR", $kv] | sort)] | length == 3 and all' \
+    && jq -e --arg kv "$KEYVAR" '.agents.providers as $p | ["ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR", $kv] as $base
+        | ($p["claude-supervisor"].env | keys) == ($base | sort)
+          and ($p["claude-lead"].env | keys) == ($base + ["SLP_JOURNAL"] | sort)
+          and ($p["claude-peer"].env | keys) == ($base + ["SLP_JOURNAL"] | sort)' \
       "$EP_HOME/.paseo/config.json" >/dev/null; then :; else EP_OK=0; fi
 done
 # The older alias SLP_CLAUDE_API_KEY still renders the same key; both names set and different is refused.
@@ -1254,13 +1256,93 @@ done
 for f in "$ROOM/claude-lead/output-styles/slp-lead.md" "$ROOM/lead.md" "$ROOM/room/roles/lead.md"; do
   if grep -qF "$WAIT_PATH" "$f" || grep -qF '@@SLP_WAIT@@' "$f"; then RENDER_OK=0; echo "  $f names slp-wait"; fi
 done
-jevf_ref off skills/supervisor/roles/lead.md | cmp -s - "$ROOM/room/roles/lead.md" || { RENDER_OK=0; echo "  room/roles/lead.md is not the Jev-off copy"; }
+jevf_ref off skills/supervisor/roles/lead.md | sed "s|@@SLP_JOURNAL@@|$ROOM/bin/slp-journal|g" | cmp -s - "$ROOM/room/roles/lead.md" || { RENDER_OK=0; echo "  room/roles/lead.md is not the Jev-off copy"; }
 [ -x "$WAIT_PATH" ] || RENDER_OK=0
 if grep -rq '@@SLP_WAIT@@' "$ROOM" --include='*.md'; then RENDER_OK=0; echo "  a rendered file still has @@SLP_WAIT@@"; fi
 if [ "$RENDER_OK" = 1 ]; then
   ok "rendered Supervisor prompt names $WAIT_PATH (exists, executable); the Lead prompt does not; no token left"
 else
   fail "rendered prompts wrong: the Supervisor must name an existing slp-wait, the Lead must not"
+fi
+
+# Rendered prompt byte budget: every seat's prompt is paid for on every turn, so it may not grow
+# past the d935943 baseline (the header line is skipped and the install path normalised, so the
+# count depends on neither the version nor where the install lives). Tighten wording elsewhere
+# to add a rule; raise a budget only on a Human decision.
+BUDGET_OK=1
+for seat_budget in supervisor:58068 lead:46706 peer:29464; do
+  seat="${seat_budget%%:*}"; budget="${seat_budget##*:}"
+  size="$(tail -n +2 "$ROOM/$seat.md" | sed "s|$ROOM|@R@|g" | wc -c | tr -d ' ')"
+  if [ "$size" -gt "$budget" ]; then BUDGET_OK=0; echo "  rendered $seat prompt is $size bytes, budget $budget"; fi
+done
+if [ "$BUDGET_OK" = 1 ]; then
+  ok "rendered Supervisor, Lead and Peer prompts are within their byte budgets"
+else
+  fail "a rendered prompt grew past its byte budget: tighten existing wording instead"
+fi
+
+# slp-journal wiring: the Lead and Peer prompts name the installed helper by absolute path (token
+# rendered like @@SLP_WAIT@@), the Supervisor prompt gets no journal instructions, install.sh
+# creates only the 0700 state/ directory (never a journal), the Lead and Peer seats get SLP_JOURNAL
+# in their provider env and the Codex launcher, and no deny rule blocks the helper.
+JOURNAL_PATH="$ROOM/bin/slp-journal"
+JOURNAL_FILE="$ROOM/state/journal.jsonl"
+JW_OK=1
+for f in "$ROOM/lead.md" "$ROOM/claude-lead/output-styles/slp-lead.md" "$ROOM/room/roles/lead.md" \
+         "$ROOM/peer.md" "$ROOM/claude-peer/output-styles/slp-peer.md" "$ROOM/room/roles/peer.md"; do
+  grep -qF "$JOURNAL_PATH" "$f" || { JW_OK=0; echo "  $f does not name $JOURNAL_PATH"; }
+done
+for f in "$ROOM/supervisor.md" "$ROOM/claude-supervisor/output-styles/slp-supervisor.md"; do
+  if grep -qF "$JOURNAL_PATH" "$f" || grep -qF 'SLP_JOURNAL' "$f"; then JW_OK=0; echo "  $f carries journal instructions"; fi
+done
+grep -q 'slp-journal' "$ROOM_DIR/SKILL.md" && { JW_OK=0; echo "  SKILL.md mentions slp-journal"; }
+grep -rq '@@SLP_JOURNAL@@' "$ROOM" --include='*.md' && { JW_OK=0; echo "  a rendered file still has @@SLP_JOURNAL@@"; }
+[ -x "$JOURNAL_PATH" ] || { JW_OK=0; echo "  $JOURNAL_PATH is not executable"; }
+[ "$(stat -c %a "$ROOM/state" 2>/dev/null || stat -f %Lp "$ROOM/state")" = "700" ] || { JW_OK=0; echo "  state/ is not 0700"; }
+[ ! -e "$JOURNAL_FILE" ] || { JW_OK=0; echo "  install.sh created the journal"; }
+jq -e --arg j "$JOURNAL_FILE" '.agents.providers as $p
+    | $p["claude-lead"].env.SLP_JOURNAL == $j and $p["claude-peer"].env.SLP_JOURNAL == $j
+      and ($p["claude-supervisor"].env.SLP_JOURNAL // null) == null' "$RENDER_HOME/.paseo/config.json" >/dev/null \
+  || { JW_OK=0; echo "  provider env SLP_JOURNAL wrong"; }
+grep -qF "SLP_JOURNAL=\"$JOURNAL_FILE\"" "$ROOM/bin/codex-peer" || { JW_OK=0; echo "  codex-peer launcher lacks SLP_JOURNAL"; }
+grep -q 'slp-journal' "$ROOM/codex-peer/rules/room.rules" && { JW_OK=0; echo "  codex rules mention slp-journal"; }
+jq -e '[.agents.providers[].disallowedTools[]?] | map(select(test("slp-journal"))) == []' "$RENDER_HOME/.paseo/config.json" >/dev/null \
+  || { JW_OK=0; echo "  a provider denies slp-journal"; }
+if [ "$JW_OK" = 1 ]; then
+  ok "rendered Lead and Peer prompts name $JOURNAL_PATH; the Supervisor gets none; state/ is 0700 with no journal; SLP_JOURNAL is in the Lead/Peer provider env and the Codex launcher; nothing denies the helper"
+else
+  fail "slp-journal wiring wrong: token rendering, state dir, SLP_JOURNAL env, or a deny rule"
+fi
+
+JOURNAL_PHRASES=(
+  'roles/lead.md|recording coordination events with `slp-journal`'
+  'roles/lead.md|Task id: <short slug> (for slp-journal)'
+  'roles/lead.md|never polled or read back; a failed call never blocks the signal.'
+  'roles/lead.md|brief T --to PEER --room R --root DIR --path P...'
+  'roles/peer.md|(--commit SHA | --patch-sha H --patch-file F)'
+  'roles/lead.md|Run `done-check` once before `DONE`'
+  'roles/lead.md|control lead --from OLD --to NEW --room OLD'
+  'roles/peer.md|record it with your'
+  'roles/peer.md|never blocks or replaces the signal; note it in residual risk.'
+  'PROTOCOL.md|`slp-journal` records coordination state'
+)
+for entry in "${JOURNAL_PHRASES[@]}"; do
+  file="$ROOM_DIR/${entry%%|*}"
+  phrase="${entry#*|}"
+  if grep -qF -- "$phrase" "$file"; then
+    ok "$file keeps the journal rule '$phrase'"
+  else
+    fail "$file missing journal rule '$phrase'"
+  fi
+done
+
+# Recovery proof: run the exact slp-journal commands the RENDERED prompts print through a
+# brief -> candidate -> review -> accept cycle, then a Lead replacement.
+if SLP_RENDERED_ROOM="$ROOM" python3 scripts/test-slp-journal.py RenderedPromptTests >"$TMP/journal-rendered.out" 2>&1; then
+  ok "the slp-journal commands in the rendered Lead/Peer prompts run a brief→candidate→review→accept cycle and survive a Lead replacement"
+else
+  tail -20 "$TMP/journal-rendered.out" >&2
+  fail "the commands in the rendered prompts do not run (scripts/test-slp-journal.py RenderedPromptTests)"
 fi
 
 # claude-lead's rendered denies are an exact set: main's baseline (Agent, Task, and the three

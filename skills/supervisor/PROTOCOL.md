@@ -2,10 +2,10 @@
 
 The shared contract for every seat in a room. Human instructions and owner
 decisions remain authoritative. A target project may add detail in its own
-`docs/WORKSPACE_PROTOCOL.md`; read it after this file when present. It may
-add detail but cannot change role authority or safety boundaries. If this
-file is missing or unreadable, report the gap to whoever launched you before
-dependent work; do not silently assume it was loaded.
+`docs/WORKSPACE_PROTOCOL.md` (read it after this file when present), but
+cannot change role authority or safety boundaries. If this file is missing
+or unreadable, report the gap to whoever launched you before dependent work;
+do not silently assume it was loaded.
 
 ```text
 Human ⇄ Supervisor ⇄ Lead ⇄ Peer
@@ -65,7 +65,7 @@ Peer → Lead         signals, mid-work messages       (final message of each Pe
   Supervisor's `slp-wait` inspections (or its heartbeat when it is idle).
   Healthy work needs no report beyond that.
 - Everything is event-driven: finish, error, permission, and heartbeat events
-  wake a seat. The Supervisor alone has a blocking wait, `slp-wait` (below).
+  wake a seat; only the Supervisor has a blocking wait, `slp-wait` (below).
   Never wait with `sleep`, `ps`, `pgrep`, `until`/`for` retry loops, or
   repeated status calls on unchanged state.
 
@@ -112,9 +112,9 @@ while delegated work runs, and costs no tokens while blocked.
 Project instructions carry outcomes, constraints, and existing authority, not
 private conversation transcripts or attribution about who spoke to whom.
 Keep briefs self-contained. Preserve the meaning of an authorized decision;
-an evidence-based question does not grant new authority or revoke existing
+an evidence-based question grants no new authority and revokes no existing
 permission. Resolve a coordination question against current ownership and
-evidence, then continue ready work without creating another approval gate.
+evidence, then continue ready work without another approval gate.
 
 - Give every moving write scope one owner. Run writable Peers in parallel
   only with verified, accepted inputs and separate write scopes.
@@ -123,7 +123,7 @@ evidence, then continue ready work without creating another approval gate.
   work merely to increase parallel activity. Continue each ready branch
   without waiting for unrelated assignments.
 - A Peer notifies Lead before changing a shared contract or writing outside
-  its owned scope; it does not expand ownership or coordinate other Peers.
+  its owned scope, and never expands ownership or coordinates other Peers.
 - A Lead brief states the observable outcome, dependencies, write scope,
   relevant contract or invariants, acceptance evidence, and when to reopen
   the decision. Implementation file lists remain provisional.
@@ -138,20 +138,22 @@ inputs exist, are accepted, and are available in the working context; a
 closed task or completion message alone does not establish readiness. Give
 each assignment enough context to start without the preceding conversation.
 
-After acceptance, Lead updates the project's existing work-status source (an
-issue, a project doc) when one exists, records remaining limits and usable
+After acceptance, Lead updates the project's existing work-status source
+when one exists, records remaining limits and usable
 downstream inputs, and reconciles affected assumptions before choosing next
-work. When a decision changes the plan, update that source — outdated task
-descriptions and completion criteria included — with the decision and its
-reason; do not leave it only in chat or create a duplicate tracker. With no
-status source, the Lead records decisions in its reports and says so in its
-`DONE` report, so Human can decide whether the project needs one.
+work. When a decision changes the plan, update that source (outdated task
+descriptions and completion criteria included) with the decision and its
+reason, not only in chat and not in a duplicate tracker. With no status
+source, Lead records decisions in its reports and says so in its `DONE`
+report, so Human can decide whether the project needs one.
 
 ## Signals
 
 Every actionable response opens with exactly one signal on its first line.
 A mid-work message from a Peer adds a second line:
 `From: <Peer title> (<its PASEO_AGENT_ID>) — continuing with <what>`.
+
+Signal text stays authoritative; `slp-journal` records coordination state.
 
 Peer → Lead:
 
@@ -208,17 +210,16 @@ For example:
 ## Independent judgment and debate
 
 Peer judgment is independent. A Peer challenges a premise only when evidence
-can materially change the result — not on taste or style. A challenge is
-`REOPEN_REQUEST` or `BLOCKED`, raised as soon as the evidence is known, not
-buried after unrelated work. `DEPENDENCY_REQUEST` and `QUESTION` are not
-debates: Lead answers them (`ANSWER`, `DEFER`, or `REVISED BRIEF` when the
-scope changes).
+can materially change the result, not on taste or style. A challenge is
+`REOPEN_REQUEST` or `BLOCKED`, raised as soon as the evidence is known, not after unrelated work.
+`DEPENDENCY_REQUEST` and `QUESTION` are not debates: Lead answers them
+(`ANSWER`, `DEFER`, or `REVISED BRIEF` when the scope changes).
 
-Lead engages on substance. "Because the brief says so" is not a disposition.
-Lead either concedes (`REVISED BRIEF`, and updates the plan record) or holds
+Lead engages on substance; "because the brief says so" is not a disposition.
+Lead either concedes (`REVISED BRIEF`, updating the plan record) or holds
 with counter-evidence (`HOLD`). The Peer may answer a `HOLD` once more, with
-new evidence only — rebut or concede. At most two exchange rounds per issue.
-Then Lead decides and records the decision, its reason, and the Peer's
+new evidence only (rebut or concede). At most two exchange rounds per issue;
+then Lead decides and records the decision, its reason, and the Peer's
 dissent. If the dispute is still material, Lead may first put a bounded
 tie-break question to a fresh read-only Peer, preferably from the other
 model family. The Peer then proceeds under the decision, noting the dissent in residual risk, or
@@ -230,9 +231,9 @@ A dispute that turns on product scope, material cost, external effects, or
 irreversible risk is not Lead's to settle: Lead returns `DECISION_NEEDED` to
 the Supervisor, who presents it to Human.
 
-The same holds one level up: the Supervisor raises evidence-based open
+One level up the same holds: the Supervisor raises evidence-based open
 questions; Lead answers with evidence or corrects course and chooses the
-technical fix. The Supervisor does not overrule a technical decision; it
+technical fix. The Supervisor never overrules a technical decision; it
 reports persistent non-resolution to Human.
 
 ## Evidence and handoff
@@ -244,8 +245,8 @@ outcome: passing tests or valid data alone do not establish usable UI,
 playback quality, or save/reopen behavior.
 
 A handoff states what is usable, how to try it, remaining limits, and usable
-downstream inputs. Permission to proceed with a limitation does not turn an
-unmet criterion into a pass.
+downstream inputs. Permission to proceed despite a limitation does not turn
+an unmet criterion into a pass.
 
 When architecture or an exact candidate carries material uncertainty, Lead
 requests a fresh read-only Peer review of the stable candidate or snapshot
@@ -264,7 +265,7 @@ for resolution while unrelated ready work continues.
 
 The Supervisor checks briefs, actual Peer responses, and Lead dispositions,
 intervenes through Lead on a concrete gap, and follows it until a repaired
-response and a disposition provide closure. An acknowledgment alone is not
+response and a disposition provide closure; an acknowledgment alone is not
 closure. Private supervision records and conversation sources never appear
 in project-facing instructions.
 

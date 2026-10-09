@@ -109,6 +109,7 @@
         "description": "Lead seat — its own Claude runtime whose output style carries the room protocol and Lead role; launches Peers only",
         "env": {
           "CLAUDE_CONFIG_DIR": "@@ROOM_HOME@@/claude-lead",
+          "SLP_JOURNAL": "@@ROOM_HOME@@/state/journal.jsonl",
           "CLAUDE_CODE_OAUTH_TOKEN": "@@CLAUDE_OAUTH_TOKEN@@"
         },
         "disallowedTools": [
@@ -138,6 +139,7 @@
         "description": "Peer seat — its own Claude runtime whose output style carries the room protocol and Peer role; can message its Lead (send_agent_prompt) but cannot spawn or control agents",
         "env": {
           "CLAUDE_CONFIG_DIR": "@@ROOM_HOME@@/claude-peer",
+          "SLP_JOURNAL": "@@ROOM_HOME@@/state/journal.jsonl",
           "CLAUDE_CODE_OAUTH_TOKEN": "@@CLAUDE_OAUTH_TOKEN@@"
         },
         "disallowedTools": [

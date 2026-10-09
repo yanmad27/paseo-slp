@@ -62,9 +62,14 @@ Invariants it checks:
   `$HOME/.config/slp-room/bin/slp-journal` (0755) with
   `paseo/schemas/room-message.v1.schema.json` under `$HOME/.config/slp-room/schemas/`;
   `install.sh` skips it with a warning when python3 >= 3.9 is missing and never
-  creates a journal. `scripts/test-slp-journal.py` passes, and `--version`
-  matches the schema's `version`. It is a helper only: `PROTOCOL.md`, `SKILL.md`
-  and the role files do not call it. See `docs/ROOM_JOURNAL.md`.
+  creates a journal, only `state/` (0700). `scripts/test-slp-journal.py` passes
+  (its `RenderedPromptTests` run the commands printed in the rendered Lead and
+  Peer prompts), and `--version` matches the schema's `version`. `lead.md` and
+  `peer.md` name it by the `@@SLP_JOURNAL@@` token (rendered to the absolute
+  path; no token may remain), the Supervisor gets no journal instructions,
+  `SLP_JOURNAL` is set in the `claude-lead`/`claude-peer` env and the Codex
+  launcher, and each rendered prompt stays within its byte budget in
+  `validate.sh`. See `docs/ROOM_JOURNAL.md`.
 - `README.md`: keeps `## Install`/`## Usage`/`## Troubleshooting` and
   mentions `/supervisor`.
 - `.release-please-manifest.json`: `.["."]` matches plugin.json `.version`.
