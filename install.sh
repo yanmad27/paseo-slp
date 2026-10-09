@@ -735,8 +735,25 @@ if [ "$DO_PASEO" = 1 ]; then
       | sed "s|@@SLP_WAIT@@|$SLP_WAIT_SED|g"  # drop the frontmatter
   } > "$ROOM_HOME/supervisor.md"
 
+  # The reviewer's inputs are validated before any runtime file is written, so a bad value aborts with the
+  # previous (restricted) reviewer settings untouched.
+  REVIEWER_DENY=("$HOME")
+  if [ -n "${SLP_REVIEWER_DENY_WRITE:-}" ]; then
+    IFS=: read -r -a REVIEWER_EXTRA <<< "$SLP_REVIEWER_DENY_WRITE"
+    for extra in "${REVIEWER_EXTRA[@]}"; do
+      case "$extra" in
+        /*) REVIEWER_DENY+=("$extra") ;;
+        "") ;;
+        *) echo "ERROR: SLP_REVIEWER_DENY_WRITE entries must be absolute paths (got '$extra')." >&2; exit 1 ;;
+      esac
+    done
+  fi
+  REVIEWER_DENY_JSON="$(jq -cn '$ARGS.positional | unique' --args "${REVIEWER_DENY[@]}")"
   for role in supervisor lead peer reviewer; do
     RUNTIME="$ROOM_HOME/claude-$role"
+    # The reviewer's settings are rendered to a side file and moved into place only after the restricted
+    # merge succeeds: an aborted install can never leave the raw user settings under the seat.
+    SETTINGS_OUT="$RUNTIME/settings.json"; [ "$role" != reviewer ] || SETTINGS_OUT="$RUNTIME/settings.json.new"
     PROMPT_ROLE="$role"; [ "$role" != reviewer ] || PROMPT_ROLE=peer  # the reviewer seat runs the Peer prompt
     mkdir -p "$RUNTIME/output-styles" "$RUNTIME/skills"
     {
@@ -774,7 +791,7 @@ if [ "$DO_PASEO" = 1 ]; then
         else . end
       | .enabledPlugins = ((.enabledPlugins // {})
           | with_entries(if (.key | test("^(paseo-slp|orchestrate)@")) then .value = false else . end))
-    ' > "$RUNTIME/settings.json"
+    ' > "$SETTINGS_OUT"
     if [ "$JEV" = 0 ]; then
       # Jev off, seats only: ask-jev disabled, its hooks removed, and the unfiltered ~/.claude/CLAUDE.md excluded from the ancestor walk; the user's own settings.json is only read.
       jq --arg md "$CLAUDE_HOME/CLAUDE.md" '
@@ -785,7 +802,7 @@ if [ "$DO_PASEO" = 1 ]; then
         | if (.permissions | type) == "object" and (.permissions.allow | type) == "array" then
             .permissions.allow |= map(select((type == "string" and test("jev"; "i")) | not))
           else . end
-      ' "$RUNTIME/settings.json" > "$RUNTIME/settings.json.tmp"
+      ' "$SETTINGS_OUT" > "$SETTINGS_OUT.tmp"
       jq '
         if (.hooks | type) == "object" then
           .hooks |= (
@@ -798,8 +815,8 @@ if [ "$DO_PASEO" = 1 ]; then
               else . end))
             | with_entries(select((.value | type) != "array" or (.value | length) > 0)))
         else . end
-      ' "$RUNTIME/settings.json.tmp" > "$RUNTIME/settings.json"
-      rm -f "$RUNTIME/settings.json.tmp"
+      ' "$SETTINGS_OUT.tmp" > "$SETTINGS_OUT"
+      rm -f "$SETTINGS_OUT.tmp"
     fi
 
     if [ "$role" = reviewer ]; then
@@ -809,18 +826,6 @@ if [ "$DO_PASEO" = 1 ]; then
       # and most env are dropped. Writes under $HOME (the launch cwd is writable by default and the docs have no
       # cwd-relative form in user settings) and under SLP_REVIEWER_DENY_WRITE are denied; the temp dir is outside
       # $HOME on macOS and is the only place the Edit/Write tools may write. Doc-claimed: slp-reviewer-check probes it.
-      REVIEWER_DENY=("$HOME")
-      if [ -n "${SLP_REVIEWER_DENY_WRITE:-}" ]; then
-        IFS=: read -r -a REVIEWER_EXTRA <<< "$SLP_REVIEWER_DENY_WRITE"
-        for extra in "${REVIEWER_EXTRA[@]}"; do
-          case "$extra" in
-            /*) REVIEWER_DENY+=("$extra") ;;
-            "") ;;
-            *) echo "ERROR: SLP_REVIEWER_DENY_WRITE entries must be absolute paths (got '$extra')." >&2; exit 1 ;;
-          esac
-        done
-      fi
-      REVIEWER_DENY_JSON="$(jq -cn '$ARGS.positional | unique' --args "${REVIEWER_DENY[@]}")"
       REVIEWER_TMP_JSON="$(jq -cn --arg t "$(cd -P "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P || echo /tmp)" '[$t, "/tmp", "/private/tmp"] | unique')"
       jq --argjson dw "$REVIEWER_DENY_JSON" --argjson tmpd "$REVIEWER_TMP_JSON" --arg home "$HOME" --arg room "$ROOM_HOME" '
         (["/.config/gh", "/.ssh", "/.aws", "/.netrc", "/.npmrc", "/.codex", "/.claude", "/.claude.json", "/.paseo/config.json"] | map($home + .)) as $homeCreds
@@ -849,10 +854,11 @@ if [ "$DO_PASEO" = 1 ]; then
         | .enabledPlugins = {}
         | .env = ((.env // {}) | if type == "object" then with_entries(select(.key | test("^(LANG|LC_[A-Z]+|TZ|NO_COLOR|ANTHROPIC_(DEFAULT_[A-Z_]+_MODEL|MODEL|SMALL_FAST_MODEL))$"))) else {} end)
         | if .env == {} then del(.env) else . end
-      ' "$RUNTIME/settings.json" > "$RUNTIME/settings.json.tmp" \
+      ' "$SETTINGS_OUT" > "$RUNTIME/settings.json.tmp" \
         && chmod 600 "$RUNTIME/settings.json.tmp" \
         && mv "$RUNTIME/settings.json.tmp" "$RUNTIME/settings.json" \
-        || { rm -f "$RUNTIME/settings.json.tmp"; echo "ERROR: could not render the reviewer sandbox settings; the reviewer would run unrestricted. Aborting." >&2; exit 1; }
+        && rm -f "$SETTINGS_OUT" \
+        || { rm -f "$RUNTIME/settings.json.tmp" "$RUNTIME/settings.json" "$SETTINGS_OUT"; echo "ERROR: could not render the reviewer sandbox settings; the reviewer would run unrestricted. Aborting." >&2; exit 1; }
     fi
 
     for shared in plugins agents commands; do

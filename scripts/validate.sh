@@ -1503,6 +1503,13 @@ if HOME="$RVH" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/nu
     "$RVH/.config/slp-room/claude-reviewer/settings.json" >/dev/null \
   && jq -e 'has("hooks")' "$RVH/.config/slp-room/claude-peer/settings.json" >/dev/null; then :; else RV_OK=0; echo "  reviewer runtime kept inherited hooks/statusLine/env/mcp allows, or the Peer runtime lost them"; fi
 if HOME="$RVH" SLP_REVIEWER_DENY_WRITE="relative/path" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1; then RV_OK=0; echo "  a relative SLP_REVIEWER_DENY_WRITE entry was accepted"; fi
+# Fail closed: an aborted re-install must leave the reviewer settings restricted (or absent), never the raw user settings.
+rv_restricted() { [ ! -e "$RVH/.config/slp-room/claude-reviewer/settings.json" ] || jq -e '.sandbox.enabled == true and (has("hooks") | not)' "$RVH/.config/slp-room/claude-reviewer/settings.json" >/dev/null 2>&1; }
+rv_restricted || { RV_OK=0; echo "  reviewer settings not restricted after a good install and a rejected SLP_REVIEWER_DENY_WRITE"; }
+chmod a-w "$RVH/.config/slp-room/claude-reviewer"
+if HOME="$RVH" "$REPO_ROOT/install.sh" --paseo-only --no-reload --no-gc >/dev/null 2>&1; then :; fi
+chmod u+w "$RVH/.config/slp-room/claude-reviewer"
+rv_restricted || { RV_OK=0; echo "  an aborted re-install left raw (unrestricted) reviewer settings"; }
 grep -q 'Room role: Peer' "$RV/claude-reviewer/output-styles/slp-reviewer.md" || { RV_OK=0; echo "  reviewer output style lacks the Peer role"; }
 jq -e '.agents.providers as $p
     | $p["claude-reviewer"].env.CLAUDE_CONFIG_DIR == $room + "/claude-reviewer"
