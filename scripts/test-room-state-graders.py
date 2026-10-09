@@ -252,11 +252,16 @@ for key, rel in G.items():
     check("consistency", len(rows) == total and len(good) == total and {"🤖", "🦾"} <= set(good),
           f"{rel} indents its 🤖/🦾 rows by the constants ({len(good)}/{total})")
 
-print("FAILED" if fails else "ALL PASS", fails)
-sys.exit(1 if fails else 0)
-
 key = "rearm"
-check(key, match(key, PRE + HDR + CARD_A + "\nslp-wait <id> 110"), "positive block then slp-wait")
-check(key, match(key, PRE + HDR + CARD_A + "\n\nBash: /x/slp-wait abc 110"), "positive block then Bash slp-wait")
+WAIT = "\nI re-arm now.\nBash: /x/slp-wait abc 110"
+check(key, match(key, PRE + HDR + CARD_A + WAIT), "positive one Lead with Peers then slp-wait")
+check(key, match(key, PRE + HDR + CARD_A + "\n" + CARD_B + WAIT), "positive two Leads with Peer rows then slp-wait")
 check(key, not match(key, "slp-wait abc 110\n" + HDR + CARD_A), "negative block after the wait")
 check(key, not match(key, PRE + "slp-wait abc 110"), "negative no block (thinking only)")
+check(key, not match(key, "```\n" + HDR + CARD_C + "\n```" + WAIT), "negative block inside a code fence")
+check(key, not match(key, PRE + HDR + CARD_C + "\n🦾 readme · running" + WAIT), "negative unindented 🦾 row")
+check(key, not match(key, PRE + HDR + CARD_C + "\n" + PEER_INDENT + "🦾 readme running" + WAIT), "negative 🦾 row without ' · '")
+check(key, not match(key, PRE + HDR + CARD_C + "\n" + PEER_INDENT + "🦾 readme" + WAIT), "negative 🦾 row without description")
+
+print("FAILED" if fails else "ALL PASS", fails)
+sys.exit(1 if fails else 0)

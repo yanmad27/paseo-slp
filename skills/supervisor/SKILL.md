@@ -238,8 +238,8 @@ turn does. `SLP_WAIT` is `@@SLP_WAIT@@`, the installed helper's absolute
 path. If that path still begins with `@@` (the install-time placeholder was
 never replaced), you are outside the installed room: do not run it, fall
 back (below). After launching or prompting a Lead, write the 🕒
-state as visible text, then Bash `SLP_WAIT <id> 110` with the Bash `timeout` parameter 140000,
-on whichever room agent is running now: a running Lead first, else a running
+state as visible text, then Bash `SLP_WAIT <id> 110` with the Bash
+`timeout` parameter 140000, on whichever room agent is running now: a running Lead first, else a running
 Peer of one of your Leads (observation only — never direct a Peer). With
 several Leads, wait on whichever runs. 110 s keeps a room inspection at least
 every 2 minutes while you spin. Your turn keeps running, and costs no
