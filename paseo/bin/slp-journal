@@ -57,6 +57,11 @@ def canon(obj):
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
+def dedup_canon(obj):
+    """Identity for retries: everything but createdAt (a retry regenerates the clock)."""
+    return canon({k: v for k, v in obj.items() if k != "createdAt"})
+
+
 def _is_id(v):
     return isinstance(v, str) and ID_RE.match(v) is not None
 
@@ -510,7 +515,7 @@ def _release(t, event, seq, owner=None):
 def apply_message(st, rec):
     env, seq = rec["envelope"], rec["seq"]
     sig, p, who, mid = env["signal"], env["payload"], env["senderAgentId"], env["messageId"]
-    st["messages"][mid] = {"seq": seq, "signal": sig, "state": "recorded", "canon": canon(env), "taskId": env["taskId"],
+    st["messages"][mid] = {"seq": seq, "signal": sig, "state": "recorded", "canon": dedup_canon(env), "taskId": env["taskId"],
                            "roomId": env["roomId"], "sender": who, "recipient": env["recipientAgentId"]}
     if sig == "BRIEF":
         rs = rec.get("resolvedScope")
@@ -570,7 +575,7 @@ def apply_message(st, rec):
         t["acceptedCandidate"], t["status"], t["openReviews"] = cid, "ACCEPTED", []
         _release(t, "released-by-accept", seq, t["owner"])
         t["acceptances"].append({"candidateId": cid, "messageId": mid, "seq": seq})
-        _process_task(st, env["taskId"], PEER_CLASS, seq)
+        _process_task(st, env["taskId"], ("CANDIDATE", "REVIEW"), seq)
         _close_signals(st, env["taskId"], cid=cid)
     elif sig == "REJECT":
         cid = env["candidateId"]
@@ -586,7 +591,7 @@ def apply_message(st, rec):
             if own == "reassign":
                 t["owner"] = p["reassignTo"]
                 t["ownership"] = {"event": "reassigned", "seq": seq}
-        _process_task(st, env["taskId"], PEER_CLASS, seq)
+        _process_task(st, env["taskId"], ("CANDIDATE", "REVIEW"), seq)
         _close_signals(st, env["taskId"], cid=cid)
     elif sig in PEER_SIGNALS:
         st["openSignals"][mid] = {"taskId": env["taskId"], "signal": sig, "candidateId": None}
@@ -600,6 +605,17 @@ def apply_message(st, rec):
             t["status"], t["block"] = "DEFERRED", {"owner": p["owner"], "returnCondition": p["returnCondition"], "messageId": mid}
         elif sig in ("ANSWER", "REVISED BRIEF") and t["status"] in ("BLOCKED", "DEFERRED"):
             t["status"], t["startMsg"], t["block"] = "ASSIGNED", mid, None
+
+
+def _drop_review(st, tid, t):
+    """A review task that stops reviewing no longer holds its target in REVIEWING."""
+    if t["kind"] != "review" or t["reviewOf"] is None:
+        return
+    tt = st["tasks"][st["candidates"][t["reviewOf"]]["taskId"]]
+    if tid in tt["openReviews"]:
+        tt["openReviews"].remove(tid)
+    if tt["status"] == "REVIEWING" and not tt["openReviews"]:
+        tt["status"] = "CANDIDATE_READY"
 
 
 def check_control(st, c):
@@ -633,6 +649,10 @@ def check_control(st, c):
             raise Reject("bad-control", "task is already owned by %s" % to)
         if t["writeScope"] is not None:
             _scope_free(st, t["writeScope"]["absPaths"], ignore_task=c["taskId"])
+        if t["kind"] == "review" and t["reviewOf"] is not None and t["status"] == "READY":
+            tt = st["tasks"][st["candidates"][t["reviewOf"]]["taskId"]]
+            if tt["currentCandidate"] != t["reviewOf"] or tt["status"] not in ("CANDIDATE_READY", "REVIEWING"):
+                raise Reject("stale-candidate", "the candidate under review is no longer current")
     if act in ("transfer", "reconcile") and "lease" in p and p["lease"] is not None and not valid_ts(p["lease"]):
         raise Reject("bad-lease", "params.lease must be RFC3339 UTC Z or null")
 
@@ -646,12 +666,17 @@ def apply_control(st, rec):
         return
     t = st["tasks"][c["taskId"]]
     if act in ("revoke", "cancel"):
+        _drop_review(st, c["taskId"], t)
         t["status"] = "CANCELLED" if act == "cancel" else "READY"
         _release(t, "cancelled" if act == "cancel" else "revoked", seq)
         t["currentCandidate"], t["openReviews"], t["block"], t["lease"] = None, [], None, None
         _process_task(st, c["taskId"], PEER_CLASS, seq)
         _close_signals(st, c["taskId"])
     elif act == "transfer":
+        if t["kind"] == "review" and t["reviewOf"] is not None and t["status"] == "READY":
+            tt = st["tasks"][st["candidates"][t["reviewOf"]]["taskId"]]
+            tt["openReviews"].append(c["taskId"])
+            tt["status"] = "REVIEWING"
         t["owner"], t["status"], t["startMsg"], t["block"] = p["to"], "ASSIGNED", None, None
         t["scopeReleased"] = t["writeScope"] is None
         t["ownership"] = {"event": "transferred", "seq": seq}
@@ -668,7 +693,7 @@ def apply_record(st, rec):
     if rec["kind"] == "message":
         apply_message(st, rec)
     elif rec["kind"] == "control":
-        apply_control(st, {**rec, "canon": canon(control_core(rec))})
+        apply_control(st, {**rec, "canon": dedup_canon(control_core(rec))})
     else:
         m = st["messages"][rec["messageId"]]
         m["state"] = rec["state"]
@@ -754,6 +779,9 @@ def open_loops(st, lead, now, running=(), permission=()):
             out.append({"type": "unreleased-scope", "taskId": tid, "detail": t["status"]})
         if v["leaseExpired"]:
             out.append({"type": "lease-expired", "taskId": tid, "detail": "lease %s needs reconcile" % t["lease"]})
+    for mid, sg in sorted(st["openSignals"].items(), key=lambda kv: st["messages"][kv[0]]["seq"]):
+        if st["tasks"][sg["taskId"]]["roomId"] in rooms:
+            out.append({"type": "signal-undisposed", "taskId": sg["taskId"], "detail": "%s %s" % (sg["signal"], mid)})
     for mid, m in sorted(st["messages"].items(), key=lambda kv: kv[1]["seq"]):
         if m["roomId"] not in rooms or m["signal"] in UNTRACKED:
             continue
@@ -762,9 +790,7 @@ def open_loops(st, lead, now, running=(), permission=()):
         peer = m["signal"] in PEER_CLASS
         if m["state"] == "processing" and (peer or is_open):
             out.append({"type": "message-needs-reconcile", "taskId": m["taskId"], "detail": "%s %s" % (m["signal"], mid)})
-        elif m["state"] in ("recorded", "delivered") and peer:
-            out.append({"type": "signal-undisposed", "taskId": m["taskId"], "detail": "%s %s" % (m["signal"], mid)})
-        elif m["state"] in ("recorded", "delivered") and is_open:
+        elif m["state"] in ("recorded", "delivered") and is_open and not peer:
             out.append({"type": "message-unprocessed", "taskId": m["taskId"], "detail": "%s %s (%s)" % (m["signal"], mid, m["state"])})
     for a in running:
         out.append({"type": "agent-running", "taskId": None, "detail": a})
@@ -921,7 +947,7 @@ class Journal:
         validate_envelope(env)
         old = self.state["messages"].get(env["messageId"])
         if old is not None:
-            if old["canon"] == canon(env):
+            if old["canon"] == dedup_canon(env):
                 return {"ok": True, "duplicate": True, "seq": old["seq"]}
             raise Reject("conflict", "messageId already recorded with different content")
         extra = check_transition(self.state, env)
@@ -932,7 +958,7 @@ class Journal:
         validate_control(c)
         old = self.state["controls"].get(c["controlId"])
         if old is not None:
-            if old["canon"] == canon(c):
+            if old["canon"] == dedup_canon(c):
                 return {"ok": True, "duplicate": True, "seq": old["seq"]}
             raise Reject("conflict", "controlId already recorded with different content")
         check_control(self.state, c)

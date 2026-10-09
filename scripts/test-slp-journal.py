@@ -906,11 +906,13 @@ class DoneCheckTests(StateMachineBase):
         self.assertIn("candidate-undisposed", self.done()[1])
         self.sok("send", "t1", "peer", "QUESTION", "--note", "q")
         self.assertIn("signal-undisposed", self.done()[1])
-        self.sok("accept", "t1", "lead", "--cid", c, "--waive", "ok")  # disposition closes the QUESTION too
+        self.sok("accept", "t1", "lead", "--cid", c, "--waive", "ok")  # does not dispose the QUESTION
+        self.assertIn("signal-undisposed", self.done()[1])
+        self.assertNotIn("candidate-undisposed", self.done()[1])
+        self.sok("send", "t1", "lead", "ANSWER", "--note", "a")
         rc, bl, r = self.done()
         self.assertEqual((rc, bl), (0, []), r)
         self.assertEqual(r.strip(), "ok done-check lead clean")
-        self.assertEqual(self.tstate()["unprocessed"], [])
         rc, bl, r = self.done("--running", "peer", "--permission-pending", "peer2")
         self.assertEqual((rc, bl), (3, ["agent-running", "permission-pending"]), r)
 
@@ -1055,6 +1057,78 @@ class ImplicitProcessingTests(StateMachineBase):
                            capture_output=True, text=True,
                            env={k: v for k, v in ENV.items() if k not in ("PASEO_AGENT_ID", "SLP_AGENT")})
         self.assertEqual(p.returncode, 2)
+
+
+class ReviewRegressionTests(StateMachineBase):
+    def test_accept_does_not_dispose_a_question(self):
+        self.brief_w()
+        q = self.sok("send", "t1", "peer", "QUESTION", "--note", "q")["msg"]
+        c = self.cand_w()
+        self.sok("accept", "t1", "lead", "--cid", c, "--waive", "ok")
+        s = self.tstate()
+        self.assertIn(q, s["openSignals"])
+        rc, bl, r = self.done()
+        self.assertEqual((rc, bl), (3, ["signal-undisposed"]), r)
+        self.sok("send", "t1", "lead", "ANSWER", "--cause", q)
+        self.assertEqual(self.done()[0], 0)
+
+    def test_reject_does_not_dispose_blocked_or_dependency_request(self):
+        self.brief_w()
+        self.sok("send", "t1", "peer", "DEPENDENCY_REQUEST", "--note", "need x")
+        c = self.cand_w()
+        self.sok("reject", "t1", "lead", "--cid", c)
+        self.assertEqual(len(self.tstate()["openSignals"]), 1)
+        self.assertIn("signal-undisposed", self.done()[1])
+
+    def test_cancel_review_task_restores_target(self):
+        self.brief_w()
+        c = self.cand_w()
+        self.review_task("rt1", c)
+        self.review_task("rt2", c, reviewer="rev2")
+        self.assertEqual(self.status(), "REVIEWING")
+        self.sc("control", "cancel", "rt1", "--as", "lead", "--room", "r1")
+        self.assertEqual(self.status(), "REVIEWING")  # rt2 still open
+        self.srej("under-review", "accept", "t1", "lead", "--cid", c, "--waive", "x")
+        self.sc("control", "cancel", "rt2", "--as", "lead", "--room", "r1")
+        self.assertEqual(self.status(), "CANDIDATE_READY")
+        self.assertEqual(self.sok("accept", "t1", "lead", "--cid", c, "--waive", "reviewer cancelled")["status"], "ACCEPTED")
+
+    def test_revoke_review_task_then_transfer_reattaches(self):
+        self.brief_w()
+        c = self.cand_w()
+        self.review_task("rt1", c)
+        self.sc("control", "revoke", "rt1", "--as", "lead", "--room", "r1")
+        self.assertEqual(self.status(), "CANDIDATE_READY")
+        rc, r = self.sc("control", "transfer", "rt1", "--as", "lead", "--room", "r1", "--to", "rev2")
+        self.assertEqual(rc, 0, r)
+        self.assertEqual(self.status(), "REVIEWING")
+        self.sc("control", "cancel", "rt1", "--as", "lead", "--room", "r1")
+        self.assertEqual(self.status(), "CANDIDATE_READY")
+
+    def test_id_retry_is_idempotent_across_seconds_but_changes_conflict(self):
+        args = ["brief", "t1", "--as", "lead", "--room", "r1", "--to", "peer", "--root", self.proj, "--path", "src/a", "--id", "b-1"]
+        self.assertEqual(self.sc(*args)[0], 0)
+        rc, r = self.sc(*args, now="2026-01-01T00:00:01Z")
+        self.assertEqual(rc, 0, r)
+        self.assertIn("ok dup BRIEF t1", r)
+        self.assertEqual(self.tstate()["lastSeq"], 1)
+        chg = list(args)
+        chg[chg.index("src/a")] = "src/ab"
+        rc, r = self.sc(*chg, now="2026-01-01T00:00:02Z")
+        self.assertEqual((rc, r["reason"]), (3, "conflict"))
+        c = ["control", "revoke", "t1", "--as", "lead", "--room", "r1", "--id", "ctl-1"]
+        self.assertEqual(self.sc(*c)[0], 0)
+        rc, r = self.sc(*c, now="2026-01-01T00:00:05Z")
+        self.assertEqual(rc, 0, r)
+        self.assertIn("ok dup control", r)
+        rc, r = self.sc("control", "cancel", "t1", "--as", "lead", "--room", "r1", "--id", "ctl-1", now="2026-01-01T00:00:06Z")
+        self.assertEqual((rc, r["reason"]), (3, "conflict"))
+        rc, r = self.app(env("raw", "QUESTION", task="zz", sender="x", recipient="y"))
+        self.assertEqual(rc, 0)
+        rc, r = self.app(env("raw", "QUESTION", task="zz", sender="x", recipient="y", createdAt="2026-02-02T00:00:00Z"))
+        self.assertEqual((rc, r["duplicate"]), (0, True))
+        rc, r = self.app(env("raw", "QUESTION", task="zz", sender="x", recipient="z"))
+        self.assertEqual((rc, r["reason"]), (3, "conflict"))
 
 
 if __name__ == "__main__":

@@ -43,8 +43,8 @@ writer-assigned, gapless and monotonic; timestamps are never used for ordering.
 Entries: `message` (an envelope), `control` (see Ownership) and `delivery` (`messageId` + state `delivered | processing |
 processed`), each with its own `entryId`. "Recorded" means the message entry exists.
 
-- Same `messageId` + identical envelope: no-op returning the original `seq`. Same `messageId` +
-  different content: rejected `conflict`.
+- Same `messageId` + identical envelope, ignoring `createdAt` (a retry regenerates the clock): no-op
+  returning the original `seq`. Same `messageId` + any other difference: rejected `conflict`.
 - Delivery states go recorded -> delivered -> processing -> processed. Repeating the current state is a
   no-op; going back is `state-regression`; skipping a step is `state-out-of-order`.
 - Crash handling: the whole complete prefix is validated first. Only if it is clean is an incomplete
@@ -125,7 +125,7 @@ CANCELLED (control cancel) revokes ownership; REVIEWED ends a review-only task.
 - `control` entries (journal-only, not message signals; signal text is untouched) are recorded by the
   coordinator with `controlId` dedup like messageId: `revoke T` (owner removed, scope released, task
   `READY`, current candidate stale), `transfer T --to X` (new owner, scope re-checked against other
-  unreleased scopes, `ASSIGNED`, current candidate stale), `cancel T`, `reconcile T [--lease ISO|none]`,
+  unreleased scopes, `ASSIGNED`, current candidate stale), `cancel T` (a review task that is revoked or cancelled leaves its target's open reviews, and the target returns to `CANDIDATE_READY` if none remain; `transfer` re-attaches it while the candidate is still current), `reconcile T [--lease ISO|none]`,
   `lead --from A --to B`.
 - Lease: a work BRIEF may carry `payload.lease = {expiresAt}`. Expiry is read against the clock at
   `state` / `done-check` time (`--now` overrides it) and only sets `leaseExpired` / `needsReconcile`.
@@ -146,8 +146,9 @@ A cancelled or merely closed upstream is not enough. Replay never re-checks the 
 `done-check LEAD [--running AGENT]... [--permission-pending AGENT]...` prints one `blocker <type> <task> <detail>`
 line per open loop and exits 3 (clean: one `ok` line, exit 0; Lead not known: `unknown-lead`). Types:
 `task-open` (any non-terminal task: assigned/running with held scope, blocked, deferred, needs repair),
-`candidate-undisposed`, `signal-undisposed` (a Peer signal without a Lead disposition - the protocol's
-"response without disposition"), `message-unprocessed` (a Lead message not yet answered on a still-open
+`candidate-undisposed`, `signal-undisposed` (a QUESTION / BLOCKED / DEPENDENCY_REQUEST / REOPEN_REQUEST or non-candidate REVIEW
+still in `state.openSignals`, whatever its processing state - the protocol's "response without
+disposition"), `message-unprocessed` (a Lead message not yet answered on a still-open
 task), `message-needs-reconcile` (explicit `processing` left behind), `lease-expired`, `unreleased-scope`,
 and the caller-supplied `agent-running` / `permission-pending`. Lead messages on ACCEPTED / CANCELLED /
 REVIEWED tasks never block. The journal cannot see Paseo run or permission state: those two come only
@@ -160,9 +161,12 @@ in the fold (state `processed`, `implicit`). Explicit `deliver` stays available,
 no-op on an implicitly processed message; an explicit `processing` is never overwritten.
 
 - A Lead disposition on a task (`accept`, `reject`, `send ANSWER|HOLD|"REVISED BRIEF"|DEFER`, `control
-  revoke|cancel|transfer`) marks every earlier unprocessed Peer signal on that task processed - or exactly
+  revoke|cancel|transfer`) marks every earlier unprocessed Peer message on that task processed - or exactly
   the one named by `--cause MSGID` for ANSWER/HOLD/REVISED BRIEF/DEFER (`unknown-cause` if it is not a
-  recorded message of the task). `accept`/`reject` also process the REVIEWs of that candidate.
+  recorded message of the task). `accept`/`reject` dispose only the candidate and its REVIEWs (and process those messages): a
+  QUESTION / BLOCKED / DEPENDENCY_REQUEST / REOPEN_REQUEST stays an open signal, and blocks `done-check`,
+  until a Lead `send` (ANSWER/HOLD/REVISED BRIEF/DEFER) or `control revoke|cancel|transfer` disposes it.
+  Disposition and delivery processing are separate.
 - A Peer's next signal on a task marks the Lead's earlier BRIEF/dispositions on that task processed.
 - ACCEPT and DEFER expect only an ACK, which is not journaled, so they are processed on record (an ACK
   that is journaled is processed on record too).
@@ -178,7 +182,7 @@ Admin/low level: `append [FILE|-]`, `deliver <messageId> <state>`, `state`, `val
 `--self-check`. Global: `--journal PATH` (or `SLP_JOURNAL`), `--now RFC3339Z`.
 
 Seat commands: sender `--as AGENT` (default `$PASEO_AGENT_ID`, then `SLP_AGENT`, so prompts omit it), room `--room R` (or `SLP_ROOM`, or the task's room);
-recipient is derived (Lead -> owner, Peer -> coordinator); `--id` makes a retry idempotent. One command per
+recipient is derived (Lead -> owner, Peer -> coordinator); `--id` makes a retry idempotent (dedup ignores `createdAt`, for messages and controls; any other difference is `conflict`). One command per
 signal, one output line `ok [dup] SIGNAL TASK seq=N status=S msg=ID [cid=C]` (rejections: JSON, exit 3).
 
 ```text
