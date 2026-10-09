@@ -322,5 +322,99 @@ class ScopeTests(Base):
         self.rej(env("b2", "BRIEF", recipient="peer", payload={"writeScope": {"root": self.proj, "paths": ["src/ab"]}}), "task-exists")
 
 
+class ReviewRepairTests(Base):
+    def test_alias_shares_lock(self):
+        self.ok(env("seed", "QUESTION"))
+        alias = os.path.join(self.dir, "alias.jsonl")
+        os.symlink(self.j, alias)
+        script = ("import subprocess,sys\nw,jp=sys.argv[1:3]\nfor i in range(10):\n"
+                  " e=%r.replace('MID','%%s-%%d'%%(w,i))\n"
+                  " p=subprocess.run([sys.executable,%r,'--journal',jp,'append','-'],input=e,text=True,capture_output=True)\n"
+                  " assert p.returncode==0,p.stdout\n") % (json.dumps(env("MID", "QUESTION")), CLI)
+        procs = [subprocess.Popen([sys.executable, "-c", script, "w%d" % w, self.j if w % 2 else alias]) for w in range(8)]
+        self.assertTrue(all(p.wait() == 0 for p in procs))
+        recs = [json.loads(l) for l in open(self.j).read().splitlines()]
+        self.assertEqual([r["seq"] for r in recs], list(range(1, 82)))
+        self.assertEqual(len({r["envelope"]["messageId"] for r in recs}), 81)
+
+    def test_nested_roots_overlap(self):
+        sub = lambda *x: os.path.join(self.proj, *x)
+        brief = lambda mid, task, who, root, paths: env(mid, "BRIEF", task=task, recipient=who,
+                                                         payload={"writeScope": {"root": root, "paths": paths}})
+        self.ok(brief("b1", "t1", "A", self.proj, ["src/a"]))
+        self.rej(brief("b2", "t2", "B", sub("src"), ["."]), "scope-conflict")
+        self.rej(brief("b3", "t3", "B", sub("src", "a"), ["b"]), "scope-conflict")
+        self.ok(brief("b4", "t4", "B", sub("other"), ["x"]))
+        self.ok(brief("b5", "t5", "C", sub("src", "ab"), ["."]))
+        self.ok(brief("b6", "t6", "D", self.proj, ["src/abc"]))
+
+    def test_scope_persisted_not_recomputed(self):
+        link = os.path.join(self.proj, "lnk")
+        os.symlink(os.path.join(self.proj, "src", "a"), link)
+        self.brief(paths=("lnk",))
+        before = self.state()["tasks"]["t1"]["writeScope"]
+        self.assertEqual(before["paths"], ["src/a"])
+        os.unlink(link)
+        os.symlink(os.path.join(self.proj, "other"), link)
+        after = self.state()["tasks"]["t1"]["writeScope"]
+        self.assertEqual(after, before)
+        self.ok(env("m9", "QUESTION"))
+        rec = json.loads(open(self.j).read().splitlines()[0])
+        self.assertIn("resolvedScope", rec)
+        self.assertNotIn("resolvedScope", rec["envelope"])
+        self.rej(env("b2", "BRIEF", task="t2", recipient="Z", payload={"writeScope": {"root": self.proj, "paths": ["src/a"]}}), "scope-conflict")
+
+    def test_unreadable_journal_is_error(self):
+        if os.geteuid() == 0:
+            self.skipTest("root ignores file modes")
+        self.ok(env("m1", "QUESTION"))
+        os.chmod(self.j, 0)
+        self.addCleanup(os.chmod, self.j, 0o600)
+        rc, r = run(["--journal", self.j, "state"])
+        self.assertEqual((rc, r["reason"]), (4, "io-error"))
+        self.assertEqual(self.app(env("m2", "QUESTION"))[0], 4)
+
+    def test_corrupt_prefix_with_torn_tail_untouched(self):
+        os.makedirs(os.path.dirname(self.j))
+        raw = b'INVALID\n{"torn":'
+        with open(self.j, "wb") as f:
+            f.write(raw)
+        os.chmod(self.j, 0o600)
+        rc, r = self.app(env("m1", "QUESTION"))
+        self.assertEqual((rc, r["reason"]), (4, "journal-corrupt"))
+        self.assertEqual(open(self.j, "rb").read(), raw)
+
+    def test_permissions_enforced(self):
+        self.ok(env("m1", "QUESTION"))
+        os.chmod(self.j, 0o644)
+        self.assertEqual(run(["--journal", self.j, "state"])[0], 0)
+        self.assertEqual(oct(os.stat(self.j).st_mode & 0o777), "0o600")
+        os.chmod(self.j, 0o666)
+        self.ok(env("m2", "QUESTION"))
+        self.assertEqual(oct(os.stat(self.j).st_mode & 0o777), "0o600")
+
+    def test_not_owned_open_mode_refused(self):
+        src = open(CLI).read()
+        self.assertIn("journal-permissions", src)
+        self.assertIn("st.st_uid != os.geteuid()", src)
+
+    def test_dir_fsync_on_create(self):
+        # strace-free check: the helper calls fsync on the parent directory when it creates files
+        import importlib.machinery, importlib.util
+        loader = importlib.machinery.SourceFileLoader("slpj", CLI)
+        spec = importlib.util.spec_from_loader("slpj", loader)
+        m = importlib.util.module_from_spec(spec)
+        loader.exec_module(m)
+        calls = []
+        real = os.fsync
+        m.os.fsync = lambda fd: (calls.append(os.fstat(fd).st_mode & 0o170000), real(fd))[1]
+        try:
+            with m.Journal(self.j, write=True) as j:
+                j.append_message(env("m1", "QUESTION"))
+        finally:
+            m.os.fsync = real
+        self.assertGreaterEqual(calls.count(0o040000), 3)  # journal dir parent, lock create, journal create
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1, warnings="ignore")

@@ -46,7 +46,9 @@ class Reject(Exception):
 
 
 class Corrupt(Exception):
-    pass
+    def __init__(self, msg, reason="journal-corrupt"):
+        super().__init__(msg)
+        self.reason = reason
 
 
 def canon(obj):
@@ -163,11 +165,26 @@ def canon_scope(root, paths):
         if full != rootc and not full.startswith(rootc + os.sep):
             raise Reject("scope-escape", p)
         out.add(os.path.relpath(full, rootc))
-    return rootc, sorted(out)
+    rels = sorted(out)
+    return rootc, rels
 
 
 def _parts(rel):
     return () if rel == "." else tuple(rel.split(os.sep))
+
+
+def abs_paths(rootc, rels):
+    return [rootc if r == "." else os.path.join(rootc, r) for r in rels]
+
+
+def abs_overlap(a, b):
+    for x in a:
+        for y in b:
+            px, py = tuple(c for c in x.split(os.sep) if c), tuple(c for c in y.split(os.sep) if c)
+            n = min(len(px), len(py))
+            if px[:n] == py[:n]:
+                return True
+    return False
 
 
 def paths_overlap(a, b):
@@ -200,11 +217,12 @@ def check_transition(st, env):
         if not isinstance(ws, dict) or set(ws) != {"root", "paths"}:
             raise Reject("bad-scope", "payload.writeScope = {root, paths[]} required")
         rootc, paths = canon_scope(ws["root"], ws["paths"])
+        absp = abs_paths(rootc, paths)
         for tid, o in st["tasks"].items():
             if (not o["scopeReleased"] and o["owner"] != env["recipientAgentId"]
-                    and o["writeScope"]["root"] == rootc and paths_overlap(paths, o["writeScope"]["paths"])):
+                    and abs_overlap(absp, o["writeScope"]["absPaths"])):
                 raise Reject("scope-conflict", "overlaps unreleased scope of task %s owned by %s" % (tid, o["owner"]))
-        return
+        return {"root": rootc, "paths": paths, "absPaths": absp}
     if sig not in ("CANDIDATE", "ACCEPT", "REJECT") and not (sig == "REVIEW" and env["payload"]["kind"] == "candidate"):
         return
     if t is None:
@@ -248,11 +266,11 @@ def apply_message(st, rec):
     st["messages"][env["messageId"]] = {"seq": seq, "signal": env["signal"], "state": "recorded", "canon": canon(env)}
     sig = env["signal"]
     if sig == "BRIEF":
-        ws = env["payload"]["writeScope"]
-        rootc, paths = canon_scope(ws["root"], ws["paths"])
+        rs = rec["resolvedScope"]
         st["tasks"][env["taskId"]] = {
             "roomId": env["roomId"], "owner": env["recipientAgentId"],
-            "writeScope": {"root": rootc, "paths": paths}, "scopeReleased": False,
+            "writeScope": {"root": rs["root"], "paths": list(rs["paths"]), "absPaths": list(rs["absPaths"])},
+            "scopeReleased": False,
             "candidates": [], "currentCandidate": None, "acceptedCandidate": None,
             "acceptances": [], "rejections": []}
         return
@@ -306,26 +324,61 @@ def public_state(st):
 
 # ---------------------------------------------------------------- storage
 
+def fsync_dir(d):
+    fd = os.open(d, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def open_new_or_existing(path, flags):
+    """Open read/write, creating 0600; fsync the parent directory when this call created the file."""
+    try:
+        fd = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return os.open(path, flags), False
+    fsync_dir(os.path.dirname(path))
+    return fd, True
+
+
 class Journal:
     def __init__(self, path, write):
         self.path, self.write, self.repaired = path, write, None
 
     def __enter__(self):
-        d = os.path.dirname(os.path.abspath(self.path))
+        # Resolve first: every alias of one journal must take the same lock.
+        self.path = os.path.join(os.path.realpath(os.path.dirname(os.path.abspath(self.path))),
+                                 os.path.basename(self.path))
+        if os.path.islink(self.path):
+            self.path = os.path.realpath(self.path)
+        d = os.path.dirname(self.path)
         if self.write:
             os.makedirs(d, mode=0o700, exist_ok=True)
+            fsync_dir(os.path.dirname(d))
         elif not os.path.isdir(d):
             raise Corrupt("journal directory does not exist")
-        lfd = os.open(self.path + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
-        self.lfd = lfd
-        fcntl.flock(lfd, fcntl.LOCK_EX if self.write else fcntl.LOCK_SH)
+        self.fd = None
+        self.lfd, _ = open_new_or_existing(self.path + ".lock", os.O_RDWR)
         try:
-            self.fd = os.open(self.path, (os.O_RDWR | os.O_CREAT) if self.write else os.O_RDONLY, 0o600)
-        except OSError:
+            fcntl.flock(self.lfd, fcntl.LOCK_EX if self.write else fcntl.LOCK_SH)
             if self.write:
-                raise
-            self.fd = None
-        self.records, self.state = self._load()
+                self.fd, _ = open_new_or_existing(self.path, os.O_RDWR)
+            else:
+                try:
+                    self.fd = os.open(self.path, os.O_RDONLY)
+                except FileNotFoundError:
+                    self.fd = None
+            if self.fd is not None:
+                st = os.fstat(self.fd)
+                if st.st_mode & 0o077:
+                    if st.st_uid != os.geteuid():
+                        raise Corrupt("journal is accessible by group/other and not owned by us", "journal-permissions")
+                    os.fchmod(self.fd, 0o600)
+            self.records, self.state = self._load()
+        except BaseException:
+            self.__exit__()
+            raise
         return self
 
     def __exit__(self, *a):
@@ -345,12 +398,8 @@ class Journal:
             chunks.append(b)
         data = b"".join(chunks)
         end = data.rfind(b"\n") + 1
-        if end != len(data):
-            self.repaired = {"truncatedBytes": len(data) - end, "atOffset": end}
-            if self.write:
-                os.ftruncate(self.fd, end)
-                os.fsync(self.fd)
-            data = data[:end]
+        torn = len(data) - end
+        data = data[:end]
         recs, off = [], 0
         for line in data.split(b"\n")[:-1]:
             try:
@@ -366,7 +415,13 @@ class Journal:
                 raise Corrupt("corrupt record at seq %d, offset %d: %s" % (len(recs) + 1, off, e))
             recs.append(rec)
             off += len(line) + 1
-        return recs, fold(recs)
+        st = fold(recs)
+        if torn:
+            self.repaired = {"truncatedBytes": torn, "atOffset": end}
+            if self.write:
+                os.ftruncate(self.fd, end)
+                os.fsync(self.fd)
+        return recs, st
 
     def _append(self, rec):
         rec = {"seq": self.state["lastSeq"] + 1, "entryId": uuid.uuid4().hex, **rec,
@@ -386,8 +441,11 @@ class Journal:
             if old["canon"] == canon(env):
                 return {"ok": True, "duplicate": True, "seq": old["seq"]}
             raise Reject("conflict", "messageId already recorded with different content")
-        check_transition(self.state, env)
-        rec = self._append({"kind": "message", "envelope": env})
+        extra = {}
+        scope = check_transition(self.state, env)
+        if scope is not None:
+            extra["resolvedScope"] = scope
+        rec = self._append({"kind": "message", "envelope": env, **extra})
         return {"ok": True, "duplicate": False, "seq": rec["seq"]}
 
     def deliver(self, message_id, state):
@@ -499,7 +557,7 @@ def main(argv):
     except Reject as e:
         return out({"ok": False, "reason": e.reason, "detail": e.detail}, 3)
     except Corrupt as e:
-        return out({"ok": False, "reason": "journal-corrupt", "detail": str(e)}, 4)
+        return out({"ok": False, "reason": e.reason, "detail": str(e)}, 4)
     except OSError as e:
         return out({"ok": False, "reason": "io-error", "detail": str(e)}, 4)
 

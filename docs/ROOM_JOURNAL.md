@@ -33,8 +33,10 @@ unusable journal exits 4; usage errors exit 2.
 
 ## Journal
 
-JSONL at an explicit path (`--journal PATH` or `SLP_JOURNAL`; there is no default). File mode 0600,
-new directory 0700. Every mutating operation (dedup lookup, transition validation, `seq`
+JSONL at an explicit path (`--journal PATH` or `SLP_JOURNAL`; there is no default). The path is
+resolved with `realpath` before the lock path is derived, so a symlink alias of the journal takes the
+same lock. New file 0600, new directory 0700. On every open, a journal whose mode grants group/other
+access is `chmod`ed to 0600 if we own it, otherwise refused (`journal-permissions`). Every mutating operation (dedup lookup, transition validation, `seq`
 allocation, append, fsync) runs inside one exclusive `flock` on `PATH.lock`. `seq` is
 writer-assigned, gapless and monotonic; timestamps are never used for ordering.
 
@@ -45,9 +47,11 @@ processed`), each with its own `entryId`. "Recorded" means the message entry exi
   different content: rejected `conflict`.
 - Delivery states go recorded -> delivered -> processing -> processed. Repeating the current state is a
   no-op; going back is `state-regression`; skipping a step is `state-out-of-order`.
-- Crash handling: under the lock, an incomplete trailing line is truncated and reported
-  (`repaired`). A malformed complete record, a `seq` gap, or interior corruption is a hard error
-  (exit 4, seq and offset reported) and nothing is written.
+- Crash handling: the whole complete prefix is validated first. Only if it is clean is an incomplete
+  trailing line truncated (under the write lock) and reported (`repaired`). A malformed complete
+  record, a `seq` gap, or interior corruption is a hard error (exit 4, seq and offset reported) and
+  the file is left byte-for-byte unchanged. Only a missing journal reads as an empty room; any
+  other open error (e.g. permission denied) is an error exit (`io-error`).
 - `state` reports a message at `processing` as `needsReconcile`; it is never retried automatically.
   Messages at recorded/delivered are `unprocessed`.
 
@@ -63,9 +67,12 @@ processed`), each with its own `entryId`. "Recorded" means the message entry exi
   must name a REVIEW of exactly that candidate, or `payload.reviewWaived` a non-empty string; not
   already accepted. Releases the write scope. REJECT keeps the scope with the owner.
 - Scope check: `realpath(root)` + normalized relative path; paths escaping the root (including via
-  symlinks) are rejected. Overlap is by path component (`src/a` overlaps `src/a/b`, not `src/ab`).
-  A BRIEF overlapping an unreleased scope of a different owner under the same canonical root is
-  rejected. Also available as `scope-overlap --root R --a P --b Q`.
+  symlinks) are rejected. Overlap is by path component (`src/a` overlaps `src/a/b`, not `src/ab`),
+  compared on canonical absolute paths, so nested roots are covered (`/p`+`src` vs `/p/src`+`.`).
+  A BRIEF overlapping an unreleased scope of a different owner is rejected. The resolved scope is
+  computed once at record time and stored in the journal entry as `resolvedScope` (next to, not
+  inside, the envelope); replay uses only the stored value, so later symlink changes do not move
+  recorded ownership. Also available as `scope-overlap --root R --a P --b Q`.
 
 The full lifecycle state machine is out of scope here.
 
@@ -79,7 +86,10 @@ The full lifecycle state machine is out of scope here.
 - Assumes a local filesystem with working `flock` (not NFS). `--self-check` only verifies `flock`
   can be taken in a temp dir.
 - Effectively-once processing comes from dedup plus idempotent handlers; this is not exactly-once.
-- Writers fsync each append; an OS or disk that lies about fsync is outside what is tested.
+- Durability assumes a local filesystem that honours `fsync`. Each append is fsynced; when the
+  journal or lock file is created, and when the journal directory is created, the containing
+  directory is fsynced too. The test checks that directory fsyncs are issued, not that data survives
+  power loss; a disk that lies about fsync is outside what is tested.
 - The whole journal is re-read on each operation (O(n)); fine for room-sized journals, not tuned.
 - Nothing authenticates the sender: `senderAgentId` is a claim, not an identity proof.
 
