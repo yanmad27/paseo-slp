@@ -60,8 +60,9 @@ Which errors reach which reasons (first 3 non-empty lines, 200 characters, redac
 | `codex-reviewer exec` stderr | the `cx-tool` SKIP |
 | outside-network controls (curl, TCP connect) and the in-sandbox client's error | the `net` / `tcp` (`cx-net` / `cx-tcp`) SKIPs |
 | fixture `mktemp` error inside the steps | the `tmp` FAIL |
+| `git rev-parse` of the pushed ref in the bare remote (exit 1 with no stderr = ref absent) | the `push` / `cx-push` SKIP when the remote cannot be inspected (exit 128, fatal message); never a PASS |
 
-Not covered: the `emit` log append inside the steps, trap cleanup and `command -v` / `grep -q` tests (none decides a row by itself), and any failure whose tool prints nothing. Results change no label: a row reaches `ENFORCED` only with an observed denial on the token route.
+Not covered: the `emit` log append inside the steps, trap cleanup and `command -v` / `grep -q` tests (none decides a row by itself), and any failure whose tool prints nothing. Results change no label: a row reaches `ENFORCED` only with an observed denial, and in the Claude summary only on the token route (the login route prints `SETTINGS-PROBE`; the Codex summary keeps its own sandbox-binary `ENFORCED` line).
 
 ## What is configured, and what is proven
 

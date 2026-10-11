@@ -170,7 +170,9 @@ STUB
   SO="$(SLP_PROBE_TMPDIR=/nonexistent/x CLAUDE_CODE_OAUTH_TOKEN=selftest-dummy SLP_RUNNER=stub-deny "$0" --runtime claude 2>&1)"
   if grep -q '^FAIL tmp .*temp write failed (.*mktemp.*No such file' <<< "$SO"; then echo "ok: the temp-creation error reaches the tmp FAIL reason"; else echo "FAIL: tmp err: $(grep -E '^FAIL tmp' <<< "$SO" | cut -c1-220)"; ST_FAIL=1; fi
   SO="$(CLAUDE_CODE_OAUTH_TOKEN=selftest-dummy SLP_RUNNER=stub-allow "$0" --runtime claude 2>&1)"
-  if grep -q '^FAIL redirect ' <<< "$SO" && grep -q '^FAIL tool ' <<< "$SO" && ! grep -qE '^ENFORCED \(claude\): .*(redirect|tool)' <<< "$SO"; then echo "ok: token route, leaking stub: FAIL rows, nothing ENFORCED"; else echo "FAIL: token route leak case"; ST_FAIL=1; fi
+  if grep -q '^FAIL redirect ' <<< "$SO" && grep -q '^FAIL tool ' <<< "$SO" && ! grep '^ENFORCED (claude)' <<< "$SO" | grep -qE ' (tool|redirect|script|symlink|push|net|tcp|cred-files|cred-env)( |$)'; then echo "ok: token route, leaking stub: FAIL rows, and no leaked protection row (tool, redirect, script, symlink, push, net, tcp, cred-*) in ENFORCED"; else echo "FAIL: token route leak case: $(grep '^ENFORCED (claude)' <<< "$SO" | cut -c1-160)"; ST_FAIL=1; fi
+  SO="$(SLP_SELFTEST_BREAK_REMOTE=1 CLAUDE_CODE_OAUTH_TOKEN=selftest-dummy SLP_RUNNER=stub-deny "$0" --runtime claude 2>&1)"
+  if grep -q '^SKIP push .*could not inspect the bare remote.*fatal' <<< "$SO" && ! grep -q '^PASS push ' <<< "$SO"; then echo "ok: an uninspectable bare remote gives a push SKIP with the git error, not PASS"; else echo "FAIL: invalid bare repo: $(grep -E ' push ' <<< "$SO" | cut -c1-200)"; ST_FAIL=1; fi
   SO="$(CLAUDE_CODE_OAUTH_TOKEN=selftest-dummy SLP_RUNNER=stub-deny "$0" --runtime claude 2>&1)"
   if grep -qE '^ENFORCED \(claude\): .*redirect' <<< "$SO" && ! grep -q 'route:' <<< "$SO"; then echo "ok: token route, denying stub: ENFORCED rows without a route qualifier"; else echo "FAIL: token route deny case"; ST_FAIL=1; fi
   rm -rf "$T"
@@ -191,6 +193,7 @@ git init -q "$PROT/src" && git -C "$PROT/src" config user.email probe@example.in
   && cp -R "$PROT/src" "$PROT/cand" && git init -q --bare "$PROT/remote.git" \
   && git -C "$PROT/src" remote add origin "$PROT/remote.git" \
   && git -C "$PROT/src" push -q origin HEAD:refs/heads/control || { echo "slp-reviewer-check: cannot set up the sandbox repo (is git working?)" >&2; exit 2; }
+[ -z "${SLP_SELFTEST_BREAK_REMOTE:-}" ] || rm -f "$PROT/remote.git/HEAD"   # self-test only: an uninspectable bare repo
 mkdir -p "$PROT/state" "$PROT/evil/.claude"
 printf '{"sandbox":{"excludedCommands":["touch *"]}}\n' > "$PROT/evil/.claude/settings.json"
 ln -s "$PROT/src" "$SCRATCH/l"
@@ -283,8 +286,11 @@ evaluate_steps() { # runtime rows out [detail]
   else declare_row "$rt" SKIP "${pre}script" "$(label_of "${pre}script" "$rows") — no python3 to run the attempt"; fi
   ok=1; [ ! -e "$PROT/src/p3" ] || ok=0; attempt_row "$rt" "$rows" "${pre}symlink" "$(rc_of "$out" symlink)" "$ok"
   if [ "$(rc_of "$out" ctl-git)" = 0 ]; then
-    ok=1; git --git-dir="$PROT/remote.git" rev-parse -q --verify refs/heads/probe >/dev/null 2>&1 && ok=0
-    attempt_row "$rt" "$rows" "${pre}push" "$(rc_of "$out" push)" "$ok"
+    # ref present (0) = the push landed; exit 1 with no stderr = ref absent; anything else = the remote could not be inspected
+    git --git-dir="$PROT/remote.git" rev-parse -q --verify refs/heads/probe >/dev/null 2>"$SCRATCH/ref.err"; ok=$?
+    if [ "$ok" = 0 ]; then attempt_row "$rt" "$rows" "${pre}push" "$(rc_of "$out" push)" 0
+    elif [ "$ok" = 1 ] && [ ! -s "$SCRATCH/ref.err" ]; then attempt_row "$rt" "$rows" "${pre}push" "$(rc_of "$out" push)" 1
+    else declare_row "$rt" SKIP "${pre}push" "$(label_of "${pre}push" "$rows") — could not inspect the bare remote (git exit $ok)$(errnote "$SCRATCH/ref.err")"; fi
   else declare_row "$rt" SKIP "${pre}push" "$(label_of "${pre}push" "$rows") — no git to run the attempt"; fi
   # network: a failure only counts with a sandbox/proxy-denial message; DNS errors, timeouts and refusals prove nothing
   local DENIAL='not permitted|EPERM|Errno 1\]|response 403|403 Forbidden|blocked|denied|sandbox'
