@@ -1333,6 +1333,9 @@ JOURNAL_PHRASES=(
   'roles/lead.md|Run `done-check` once before `DONE`'
   'roles/lead.md|control lead --from OLD --to NEW --room OLD'
   'roles/peer.md|record it with your'
+  'roles/lead.md|review T --as REVIEWER [--kind plan|watch|other]'
+  'roles/lead.md|Review peers cannot journal: `review` records their REVIEW before `accept`.'
+  'roles/peer.md|review peers: your Lead records your REVIEW'
   'roles/peer.md|never blocks or replaces the signal; note it in residual risk.'
   'PROTOCOL.md|`slp-journal` records coordination state'
 )

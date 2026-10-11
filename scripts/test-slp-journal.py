@@ -1233,14 +1233,16 @@ class RenderedPromptTests(unittest.TestCase):
                     cmds["brief"] = part
                 else:
                     cmds[part.split()[0]] = part
-        self.assertEqual(set(cmds) - {"transfer"}, {"brief", "brief-review", "accept", "reject", "send", "control", "done-check"})
+        self.assertEqual(set(cmds) - {"transfer"}, {"brief", "brief-review", "review", "accept", "reject", "send", "control", "done-check"})
         ctl = re.search(r"records `(control lead [^`]+)`", lead).group(1)
         self.assertIn("`state`", lead)
         self.assertIn("`R` your room id", lead)
-        pj = re.search(r"Journal:.*?one Bash call to `" + re.escape(jbin) + r"`:(.*?)\n- ", peer, re.S)
+        pj = re.search(r"Journal .*?one Bash call to `" + re.escape(jbin) + r"`:(.*?)\n- ", peer, re.S)
         self.assertTrue(pj, "Peer prompt has no Journal rule naming the helper")
         pcmds = {c.split()[0]: c for c in re.findall(r"`([a-z]+ T[^`]*)`", pj.group(1))}
         self.assertEqual(set(pcmds), {"candidate", "review", "send"})
+        self.assertIn("--as REVIEWER", cmds["review"])
+        self.assertRegex(peer, r"Journal \(review peers: your Lead records your REVIEW\)")
 
         with tempfile.TemporaryDirectory() as d:
             jp = os.path.join(d, "state", "journal.jsonl")
@@ -1249,7 +1251,7 @@ class RenderedPromptTests(unittest.TestCase):
                 f.write("snapshot\n")
             v = {"T": "tsk", "PEER": "peer-1", "DIR": "/repo", "P": ["src/a.py"], "B": "abc123",
                  "SHA": "0123456789abcdef0123456789abcdef01234567", "R": "lead-1",
-                 "LEAD": "lead-1", "OLD": "lead-1", "NEW": "lead-2", "opt:--evidence": "ev1",
+                 "LEAD": "lead-1", "REVIEWER": "rev-1", "OLD": "lead-1", "NEW": "lead-2", "opt:--evidence": "ev1",
                  "H": hashlib.sha256(b"snapshot\n").hexdigest(), "F": pf}
 
             def go(who, argv, ok=True):
@@ -1264,7 +1266,10 @@ class RenderedPromptTests(unittest.TestCase):
             cid = cid_from(go("peer-1", self._bind(pcmds["candidate"], v, opts=("--evidence",))))
             v.update({"C": cid, "T": "tsk-rev", "PEER": "rev-1"})
             go("lead-1", self._bind(cmds["brief-review"], v))
-            go("rev-1", self._bind(pcmds["review"], v))
+            v["T"] = "tsk"
+            self.assertIn("review", go("lead-1", self._bind(cmds["accept"], v), ok=False))
+            v["T"] = "tsk-rev"
+            go("lead-1", self._bind(cmds["review"], v))
             v["T"] = "tsk"
             go("lead-1", self._bind(cmds["accept"], v))
             self.assertIn("clean", go("lead-1", self._bind(cmds["done-check"], v)))
@@ -1285,7 +1290,8 @@ class RenderedPromptTests(unittest.TestCase):
             # The new Lead finishes the loop with the exact rendered lines; R stays the recovered room id.
             v.update({"C": cidb, "T": "tskb-rev", "PEER": "rev-2"})
             go("lead-2", self._bind(cmds["brief-review"], v))
-            go("rev-2", self._bind(pcmds["review"], v))
+            v["REVIEWER"] = "rev-2"
+            go("lead-2", self._bind(cmds["review"], v))
             v["T"] = "tskb"
             go("lead-2", self._bind(cmds["accept"], v))
             v.update({"T": "tsk2", "PEER": "peer-2", "P": ["src/b.py"]})
