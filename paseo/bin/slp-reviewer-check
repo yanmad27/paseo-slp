@@ -80,7 +80,7 @@ if [ "$DRY" = 1 ]; then
     printf '%s\n' "$CLAUDE_ROWS" | while IFS='|' read -r id model label; do echo "  PLAN claude $id (model turn: $model) $label"; done
   fi
   if [ "$WANT" != claude ]; then
-    echo "codex: steps.sh under \`codex -c sandbox_mode=read-only sandbox -- sh steps.sh\` (legacy \`sandbox macos|linux --\` only after a usage error) \`\` (no model; tests the sandbox binary, not the launcher or Paseo's modeId path); cx-tool is one \`codex-reviewer exec --json\` turn"
+    echo "codex: steps.sh under \`codex -c sandbox_mode=read-only sandbox -- sh steps.sh\` (legacy \`sandbox macos|linux --\` only after a usage error) (no model; tests the sandbox binary, not the launcher or Paseo's modeId path); cx-tool is one \`codex-reviewer exec --json\` turn"
     printf '%s\n' "$CODEX_ROWS" | while IFS='|' read -r id model label; do echo "  PLAN codex $id (model turn: $model) $label"; done
   fi
   echo "summary per runtime: ENFORCED (PASS rows with an observed denial) / CONFIG PRESENT / PROMPT-ONLY (FAIL rows, MCP tools and hooks) / UNVERIFIED (SKIP rows); nothing is ENFORCED before a real run"
