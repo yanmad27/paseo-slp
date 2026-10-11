@@ -46,7 +46,22 @@ CLAUDE_CODE_OAUTH_TOKEN=... ~/.config/slp-room/bin/slp-reviewer-check --runtime 
 
 The Codex rows run `codex -c … sandbox -- sh steps.sh …` (current codex-cli: the OS is implied). The older `codex sandbox macos|linux -- …` form is retried, with the same `-c` flags, only when the first attempt exits 2 with a clap-style parser error (`error: unexpected argument`, `error: unrecognized subcommand`, `Usage: codex sandbox`); a runtime denial never retries.
 
-Stderr of the runner and sandbox calls, the `jq` parsing, the runtime copy and fixture temp creation is captured in the fixture, and its first lines (3 at most, 200 characters, JWTs, `sk-…` keys and 32+ character base64-like runs redacted) go into the reasons of the rows it affects. This is best effort, not complete coverage: the redaction is pattern-based, the `emit` log append and cleanup stay quiet, and a runner that prints nothing yields no detail. Results change no label: a row reaches `ENFORCED` only with an observed denial.
+Which errors reach which reasons (first 3 non-empty lines, 200 characters, redacted as above; a source that produced nothing adds nothing):
+
+| Source | Reaches |
+|---|---|
+| `claude` stderr (first turn) | every Claude row SKIPped with "the turn ran no steps", and the tool and no-prompt SKIPs |
+| second `claude` turn stderr (repo-settings) | the `repo-settings` SKIP |
+| `jq` parse errors on the transcripts, read when each row is emitted | the tool, no-prompt and repo-settings SKIPs and the `cx-tool` SKIP |
+| reading `steps.log` / the control Write marker | "ran no steps" rows / the tool SKIP for the missing control Write |
+| `jq` check of the rendered settings | the `cfg-claude` FAIL |
+| `codex sandbox` stderr (and the legacy attempt's) | the `cx-*` SKIPs when the control read did not run |
+| copying the Codex runtime to the fixture | the `cx-*` SKIPs when codex is unusable |
+| `codex-reviewer exec` stderr | the `cx-tool` SKIP |
+| outside-network controls (curl, TCP connect) and the in-sandbox client's error | the `net` / `tcp` (`cx-net` / `cx-tcp`) SKIPs |
+| fixture `mktemp` error inside the steps | the `tmp` FAIL |
+
+Not covered: the `emit` log append inside the steps, trap cleanup and `command -v` / `grep -q` tests (none decides a row by itself), and any failure whose tool prints nothing. Results change no label: a row reaches `ENFORCED` only with an observed denial on the token route.
 
 ## What is configured, and what is proven
 
