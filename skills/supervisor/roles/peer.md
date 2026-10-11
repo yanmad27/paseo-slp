@@ -45,8 +45,8 @@ evidence is known, not buried in progress text or after unrelated work.
 ## Talking to your Lead
 You and Lead talk both ways. Your brief names Lead's agent ID; message no
 one else.
-- Nothing left to do safely → end your turn with the signal (Lead is
-  notified when it ends): `CANDIDATE`, `REVIEW`, `BLOCKED`, and any
+- Nothing left to do safely → end your turn with the signal:
+  `CANDIDATE`, `REVIEW`, `BLOCKED`, and any
   challenge that stops all your work.
 - You can keep working on unaffected parts → send the signal mid-work with
   `send_agent_prompt` to your Lead (`background: true`,
@@ -87,7 +87,7 @@ when a turn ends, so never end a turn without one.
   the signal table lists, write ownership retained or relinquished included.
 - A `REVIEW` answers the bounded question with candidate identity, findings,
   evidence, and limits — no fabricated writable handoff.
-- Journal (review peers: your Lead records your REVIEW): same turn, before the signal message, record it with your
+- Journal (not `Review peer`/`Codex review peer`: no journal calls, your Lead records your REVIEW): same turn, before the signal message, record it with your
   brief's task id, one Bash call to `@@SLP_JOURNAL@@`:
   `candidate T --base B (--commit SHA | --patch-sha H --patch-file F)
   --path P... [--evidence E]`,

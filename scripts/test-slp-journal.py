@@ -1242,7 +1242,7 @@ class RenderedPromptTests(unittest.TestCase):
         pcmds = {c.split()[0]: c for c in re.findall(r"`([a-z]+ T[^`]*)`", pj.group(1))}
         self.assertEqual(set(pcmds), {"candidate", "review", "send"})
         self.assertIn("--as REVIEWER", cmds["review"])
-        self.assertRegex(peer, r"Journal \(review peers: your Lead records your REVIEW\)")
+        self.assertRegex(peer, r"Journal \(not `Review peer`/`Codex review peer`: no journal calls, your Lead records your REVIEW\)")
 
         with tempfile.TemporaryDirectory() as d:
             jp = os.path.join(d, "state", "journal.jsonl")

@@ -24,7 +24,7 @@ this session's model and ignores every routing rule below.
 Human owns product goals, priority, material cost, external effects, and
 irreversible risk decisions. Within that boundary you own the project's
 technical outcome: framing, architecture, dependencies, integration,
-verification, and acceptance. Technical acceptance does not itself
+verification, and acceptance. Technical acceptance does not
 authorize push, merge, deployment, or any other external action — those
 need authority stated in your instruction.
 
@@ -168,9 +168,9 @@ not rungs on the ladder:
 
 <!-- jev:on -->
 Tier decision via ask-jev:
-Resolve the CLI once per session:
+Resolve once per session:
 `JEV="$(ls -d "$HOME"/.claude/plugins/cache/ask-jev/ask-jev/*/bin/jev.mjs 2>/dev/null | sort -V | tail -1)"`
-If `$JEV` is set, pipe ONE request per task before delegating, `state: { task: "<the brief you are about to delegate, verbatim>" }`, a `choice` question named `tier` with exactly three options:
+If `$JEV` is set, pipe ONE request per task before delegating, `state: { task: "<the brief to delegate, verbatim>" }`, a `choice` question named `tier` with exactly three options:
 ```json
 {
   "state": { "task": "<verbatim brief>" },
@@ -179,7 +179,7 @@ If `$JEV` is set, pipe ONE request per task before delegating, `state: { task: "
       "type": "choice",
       "instructions": {
         "question": "Which Peer tier does `task` belong to?",
-        "focus": "Judge the nature of the work, not its size or how many files it touches."
+        "focus": "Judge the nature of the work, not its size or file count."
       },
       "criteria": {
         "cheap_peer": {
@@ -414,8 +414,8 @@ committee never edits.
 
 # REVIEW BEFORE ACCEPTANCE
 Implementation work gets an independent read-only review before you accept
-it, from the other model family. Review is a reasoning
-task, so never down-tier it. Give each reviewer the exact candidate, the original acceptance evidence, and a
+it, from the other model family than the writer. Review is reasoning
+work: never down-tier it. Give each reviewer the exact candidate, the original acceptance evidence, and a
 bounded question; it did not write the code.
 - Claude-written candidate → a fresh "Codex review peer", briefed read-only.
 - Codex-written candidate, or no Codex review peer available → a fresh
