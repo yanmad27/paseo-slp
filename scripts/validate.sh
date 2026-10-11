@@ -1291,6 +1291,26 @@ else
   fail "a rendered prompt grew past its byte budget: tighten existing wording instead"
 fi
 
+# The same no-growth rule for the Jev-on render (--jev), pinned to the d935943 Jev-on sizes.
+JBH="$TMP/home-budget-jev"
+mk_jev_home "$JBH"
+JBROOM="$JBH/.config/slp-room"
+JBUDGET_OK=1
+if jev_install "$JBH" --jev >/dev/null 2>&1; then
+  for seat_budget in supervisor:58105 lead:50522 peer:29464; do
+    seat="${seat_budget%%:*}"; budget="${seat_budget##*:}"
+    size="$(tail -n +2 "$JBROOM/$seat.md" | sed "s|$JBROOM|@R@|g" | wc -c | tr -d ' ')"
+    if [ "$size" -gt "$budget" ]; then JBUDGET_OK=0; echo "  Jev-on rendered $seat prompt is $size bytes, budget $budget"; fi
+  done
+else
+  JBUDGET_OK=0
+fi
+if [ "$JBUDGET_OK" = 1 ]; then
+  ok "Jev-on rendered Supervisor, Lead and Peer prompts are within their byte budgets"
+else
+  fail "a Jev-on rendered prompt grew past its byte budget (or --jev install failed): tighten existing wording instead"
+fi
+
 # slp-journal wiring: the Lead and Peer prompts name the installed helper by absolute path (token
 # rendered like @@SLP_WAIT@@), the Supervisor prompt gets no journal instructions, install.sh
 # creates only the 0700 state/ directory (never a journal), the Lead and Peer seats get SLP_JOURNAL
@@ -1333,6 +1353,10 @@ JOURNAL_PHRASES=(
   'roles/lead.md|Run `done-check` once before `DONE`'
   'roles/lead.md|control lead --from OLD --to NEW --room OLD'
   'roles/peer.md|record it with your'
+  'roles/lead.md|review T --as REVIEWER [--kind plan|watch|other]'
+  'roles/lead.md|send T QUESTION|BLOCKED|DEPENDENCY_REQUEST|REOPEN_REQUEST --as REVIEWER'
+  'roles/lead.md|Review peers can'"'"'t journal: record for them with the `--as` lines before your disposition.'
+  'roles/peer.md|not `Review peer`/`Codex review peer`: your Lead journals for you'
   'roles/peer.md|never blocks or replaces the signal; note it in residual risk.'
   'PROTOCOL.md|`slp-journal` records coordination state'
 )

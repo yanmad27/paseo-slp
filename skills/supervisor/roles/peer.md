@@ -16,7 +16,7 @@ other external effect needs explicit authority in the brief.
 
 If your assignment requires changes outside your owned scope or to a shared
 contract, stop and tell Lead (`DEPENDENCY_REQUEST` or `QUESTION`) before
-making them. Do not expand ownership or coordinate other Peers.
+making them. Do not expand ownership.
 
 When writing, own the moving scope and its proportionate proof. When asked
 for architecture or candidate review, or when the brief says read-only,
@@ -45,8 +45,8 @@ evidence is known, not buried in progress text or after unrelated work.
 ## Talking to your Lead
 You and Lead talk both ways. Your brief names Lead's agent ID; message no
 one else.
-- Nothing left to do safely → end your turn with the signal (Lead is
-  notified when it ends): `CANDIDATE`, `REVIEW`, `BLOCKED`, and any
+- Nothing left to do safely → end your turn with the signal:
+  `CANDIDATE`, `REVIEW`, `BLOCKED`, and any
   challenge that stops all your work.
 - You can keep working on unaffected parts → send the signal mid-work with
   `send_agent_prompt` to your Lead (`background: true`,
@@ -87,7 +87,7 @@ when a turn ends, so never end a turn without one.
   the signal table lists, write ownership retained or relinquished included.
 - A `REVIEW` answers the bounded question with candidate identity, findings,
   evidence, and limits — no fabricated writable handoff.
-- Journal: same turn, before the signal message, record it with your
+- Journal (not `Review peer`/`Codex review peer`: your Lead journals for you): same turn, before the signal message, record it with your
   brief's task id, one Bash call to `@@SLP_JOURNAL@@`:
   `candidate T --base B (--commit SHA | --patch-sha H --patch-file F)
   --path P... [--evidence E]`,
