@@ -1231,9 +1231,11 @@ class RenderedPromptTests(unittest.TestCase):
                     cmds["brief-review"] = part
                 elif part.startswith("brief "):
                     cmds["brief"] = part
+                elif part.startswith("send ") and "--as REVIEWER" in part:
+                    cmds["send-as"] = part
                 else:
                     cmds[part.split()[0]] = part
-        self.assertEqual(set(cmds) - {"transfer"}, {"brief", "brief-review", "review", "accept", "reject", "send", "control", "done-check"})
+        self.assertEqual(set(cmds) - {"transfer"}, {"brief", "brief-review", "review", "send-as", "accept", "reject", "send", "control", "done-check"})
         ctl = re.search(r"records `(control lead [^`]+)`", lead).group(1)
         self.assertIn("`state`", lead)
         self.assertIn("`R` your room id", lead)
@@ -1242,7 +1244,9 @@ class RenderedPromptTests(unittest.TestCase):
         pcmds = {c.split()[0]: c for c in re.findall(r"`([a-z]+ T[^`]*)`", pj.group(1))}
         self.assertEqual(set(pcmds), {"candidate", "review", "send"})
         self.assertIn("--as REVIEWER", cmds["review"])
-        self.assertRegex(peer, r"Journal \(not `Review peer`/`Codex review peer`: no journal calls, your Lead records your REVIEW\)")
+        for sig in ("QUESTION", "BLOCKED", "DEPENDENCY_REQUEST", "REOPEN_REQUEST"):
+            self.assertIn(sig, cmds["send-as"])
+        self.assertRegex(peer, r"Journal \(not `Review peer`/`Codex review peer`: your Lead journals for you\)")
 
         with tempfile.TemporaryDirectory() as d:
             jp = os.path.join(d, "state", "journal.jsonl")
@@ -1266,6 +1270,12 @@ class RenderedPromptTests(unittest.TestCase):
             cid = cid_from(go("peer-1", self._bind(pcmds["candidate"], v, opts=("--evidence",))))
             v.update({"C": cid, "T": "tsk-rev", "PEER": "rev-1"})
             go("lead-1", self._bind(cmds["brief-review"], v))
+            # A restricted reviewer's QUESTION is recorded by the Lead and blocks done-check until dispositioned.
+            qid = re.search(r"msg=(\w+)", go("lead-1", self._bind(cmds["send-as"], v, alt="QUESTION"))).group(1)
+            self.assertIn("signal-undisposed tsk-rev QUESTION", go("lead-1", self._bind(cmds["done-check"], v), ok=False))
+            v["opt:--cause"] = qid
+            go("lead-1", self._bind(cmds["send"], v, opts=("--cause",), alt="ANSWER"))
+            self.assertNotIn("signal-undisposed tsk-rev", go("lead-1", self._bind(cmds["done-check"], v), ok=False))
             v["T"] = "tsk"
             self.assertIn("review", go("lead-1", self._bind(cmds["accept"], v), ok=False))
             v["T"] = "tsk-rev"

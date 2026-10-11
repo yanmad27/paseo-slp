@@ -87,7 +87,7 @@ when a turn ends, so never end a turn without one.
   the signal table lists, write ownership retained or relinquished included.
 - A `REVIEW` answers the bounded question with candidate identity, findings,
   evidence, and limits — no fabricated writable handoff.
-- Journal (not `Review peer`/`Codex review peer`: no journal calls, your Lead records your REVIEW): same turn, before the signal message, record it with your
+- Journal (not `Review peer`/`Codex review peer`: your Lead journals for you): same turn, before the signal message, record it with your
   brief's task id, one Bash call to `@@SLP_JOURNAL@@`:
   `candidate T --base B (--commit SHA | --patch-sha H --patch-file F)
   --path P... [--evidence E]`,

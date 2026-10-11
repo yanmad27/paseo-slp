@@ -1354,8 +1354,9 @@ JOURNAL_PHRASES=(
   'roles/lead.md|control lead --from OLD --to NEW --room OLD'
   'roles/peer.md|record it with your'
   'roles/lead.md|review T --as REVIEWER [--kind plan|watch|other]'
-  'roles/lead.md|Review peers cannot journal: `review` records their REVIEW before `accept`.'
-  'roles/peer.md|not `Review peer`/`Codex review peer`: no journal calls, your Lead records your REVIEW'
+  'roles/lead.md|send T QUESTION|BLOCKED|DEPENDENCY_REQUEST|REOPEN_REQUEST --as REVIEWER'
+  'roles/lead.md|Review peers can'"'"'t journal: record for them with the `--as` lines before your disposition.'
+  'roles/peer.md|not `Review peer`/`Codex review peer`: your Lead journals for you'
   'roles/peer.md|never blocks or replaces the signal; note it in residual risk.'
   'PROTOCOL.md|`slp-journal` records coordination state'
 )
