@@ -185,7 +185,7 @@ is `not-coordinator` from then on, and a BRIEF over a held scope is `scope-confl
 into their `@@SLP_JOURNAL@@` token. The Lead records BRIEF (after `create_agent`; `--room R` on every new
 task, R = its own id, or the old Lead's id after a replacement), its dispositions and control records, and runs `done-check` once before `DONE`; a writable Peer records
 its CANDIDATE, REVIEW and blocking signals with the task id from its brief, in the same turn, before the signal
-message. Restricted review seats (`Review peer`, `Codex review peer`) cannot write the journal and make no journal call at all: the Lead records their REVIEW (`review T --as <reviewerId>`) and their actionable signals (`send T QUESTION|BLOCKED|DEPENDENCY_REQUEST|REOPEN_REQUEST --as <reviewerId>`; BLOCKED also takes `--owner A --return COND`), beside its disposition and before `accept`/`done-check`, so such a signal blocks `done-check` until the Lead's disposition (`send … --cause`) closes it. The Lead never records CANDIDATEs or a writable Peer's signals this way. The sender is a claim (unchanged limit): nothing proves the Lead did not name another seat. Each is one short command, never polled; the journal is read back only (`state`, once) by a replacement
+message. Restricted review seats (`Review peer`, `Codex review peer`) cannot write the journal and make no journal call at all: the Lead records their REVIEW (`review T --as <reviewerId>`) and their actionable signals (`send T QUESTION|BLOCKED|DEPENDENCY_REQUEST|REOPEN_REQUEST --as <reviewerId>`), beside its disposition and before `accept`/`done-check`, so such a signal blocks `done-check` until the Lead's disposition (`send … --cause`) closes it. The Lead never records CANDIDATEs or a writable Peer's signals this way. The sender is a claim (unchanged limit): nothing proves the Lead did not name another seat. Each is one short command, never polled; the journal is read back only (`state`, once) by a replacement
 Lead, which then records `control lead --from OLD --to NEW --room OLD`. The signal text stays the authoritative
 message and a failed journal call never blocks it. The Supervisor has no journal duty.
 `validate.sh` pins each rendered prompt's byte budget and runs the commands extracted from the rendered prompts
@@ -215,6 +215,7 @@ Lead  done-check LEAD [--running ID]... [--permission-pending ID]...
 ```
 
 `candidate` prints the `cid=` the Lead then uses in `accept`/`reject`/`brief --review`.
+BLOCKED and DEFER need an owner and a return condition; when `--owner`/`--return` are omitted they default to: BLOCKED owner = the room's coordinator (Lead), return `Lead disposition`; DEFER owner = the sender (Lead), return `next disposition`. Explicit values win, so the prompts' plain `send T BLOCKED` / `send T DEFER` lines are accepted.
 `state` is the only command that prints JSON on success.
 
 ## Limits

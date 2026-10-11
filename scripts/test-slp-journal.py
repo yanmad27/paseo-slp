@@ -688,17 +688,24 @@ class LifecycleTests(StateMachineBase):
         self.srej("stale-candidate", "brief", "rt", "lead", "--to", "rev", "--review", "--cid", c1)
         self.srej("unknown-candidate", "brief", "rt", "lead", "--to", "rev", "--review", "--cid", "e" * 64)
 
+    def test_blocked_and_deferred_default_owner_and_return_condition(self):
+        self.brief_w()
+        self.sok("send", "t1", "peer", "BLOCKED", "--note", "x")
+        b = self.tstate()["tasks"]["t1"]["block"]
+        self.assertEqual((b["owner"], b["returnCondition"]), ("lead", "Lead disposition"))
+        self.sok("send", "t1", "lead", "ANSWER", "--note", "go")
+        self.sok("send", "t1", "lead", "DEFER")
+        b = self.tstate()["tasks"]["t1"]["block"]
+        self.assertEqual((b["owner"], b["returnCondition"]), ("lead", "next disposition"))
+
     def test_blocked_and_deferred_carry_owner_and_return_condition(self):
         self.brief_w()
-        self.srej("missing-field", "send", "t1", "peer", "BLOCKED", "--note", "x")
-        self.srej("missing-field", "send", "t1", "peer", "BLOCKED", "--owner", "lead")
         self.sok("send", "t1", "peer", "BLOCKED", "--owner", "lead", "--return", "api ready")
         t = self.tstate()["tasks"]["t1"]
         self.assertEqual((t["status"], t["block"]["owner"], t["block"]["returnCondition"], t["scopeReleased"]), ("BLOCKED", "lead", "api ready", False))
         self.srej("scope-conflict", "brief", "t2", "lead", "--to", "z", "--root", self.proj, "--path", "src/a")
         self.sok("send", "t1", "lead", "ANSWER", "--note", "go")
         self.assertEqual(self.status(), "ASSIGNED")
-        self.srej("missing-field", "send", "t1", "lead", "DEFER", "--owner", "lead")
         self.sok("send", "t1", "lead", "DEFER", "--owner", "lead", "--return", "after t9 lands")
         t = self.tstate()["tasks"]["t1"]
         self.assertEqual((t["status"], t["block"]["owner"]), ("DEFERRED", "lead"))
@@ -1313,6 +1320,115 @@ class RenderedPromptTests(unittest.TestCase):
             v["T"] = "tsk2"
             v["PEER"] = "peer-2"
             go("peer-2", self._bind(pcmds["send"], v, alt="QUESTION"))
+
+    def test_every_rendered_command_and_signal_alternative_is_accepted(self):
+        """Executes each rendered Lead/Peer command line, every signal alternative, with no extra flags."""
+        lead, peer = self._read("lead.md"), self._read("peer.md")
+        jbin = re.search(r"with `(\S+) <line below>`", lead).group(1)
+        block = re.search(r"<line below>`.*?```\n(.*?)```", lead, re.S).group(1).strip().split("\n")
+        cmds = {}
+        for line in block:
+            for part in line.split(" | "):
+                part = part.strip()
+                if part.startswith("brief ") and "--review" in part:
+                    cmds["brief-review"] = part
+                elif part.startswith("brief "):
+                    cmds["brief"] = part
+                elif part.startswith("send ") and "--as REVIEWER" in part:
+                    cmds["send-as"] = part
+                else:
+                    cmds[part.split()[0]] = part
+        pj = re.search(r"Journal .*?one Bash call to `" + re.escape(jbin) + r"`:(.*?)\n- ", peer, re.S).group(1)
+        pcmds = {c.split()[0]: c for c in re.findall(r"`([a-z]+ T[^`]*)`", pj)}
+        peer_alts = pcmds["send"].split()[2].split("|")
+        lead_alts = cmds["send"][len("send T "):].split(" [")[0].replace('"REVISED BRIEF"', "REVISED_BRIEF").split("|")
+        self.assertEqual(set(peer_alts), {"QUESTION", "BLOCKED", "DEPENDENCY_REQUEST", "REOPEN_REQUEST"})
+        self.assertEqual(set(lead_alts), {"ANSWER", "HOLD", "REVISED_BRIEF", "DEFER"})
+        self.assertEqual(set(cmds["send-as"].split()[2].split("|")), set(peer_alts))
+        quote = {"REVISED_BRIEF": '"REVISED BRIEF"'}
+
+        with tempfile.TemporaryDirectory() as d:
+            jp = os.path.join(d, "state", "journal.jsonl")
+            n = [0]
+            v = {"PEER": "w", "DIR": "/repo", "B": "abc123", "R": "lead-1", "LEAD": "lead-1",
+                 "SHA": "0123456789abcdef0123456789abcdef01234567", "OLD": "lead-1", "NEW": "lead-2", "X": "other"}
+
+            def go(who, argv, ok=True):
+                rc, out = self._call(jp, who, jbin, argv)
+                self.assertEqual(rc == 0, ok, (argv, rc, out))
+                return out
+
+            def msg(out):
+                return re.search(r"msg=(\w+)", out).group(1)
+
+            def work(peer):
+                n[0] += 1
+                v.update({"T": "t%d" % n[0], "PEER": peer, "P": ["f%d.py" % n[0]], "opt:--evidence": "e"})
+                go("lead-1", self._bind(cmds["brief"], v))
+                return v["T"]
+
+            def disposition(alt, cause):
+                v["opt:--cause"] = cause
+                return go("lead-1", self._bind(cmds["send"], v, opts=("--cause",), alt=quote.get(alt, alt)))
+
+            # Every Peer signal alternative, from a writable Peer, with each Lead disposition.
+            pairs = [("QUESTION", "ANSWER"), ("BLOCKED", "DEFER"), ("DEPENDENCY_REQUEST", "DEFER"), ("REOPEN_REQUEST", "REVISED_BRIEF"),
+                     ("REOPEN_REQUEST", "HOLD"), ("QUESTION", "DEFER"), ("BLOCKED", "ANSWER")]
+            for sig, disp in pairs:
+                peer_id = "w%d" % (n[0] + 1)
+                t = work(peer_id)
+                mid = msg(go(peer_id, self._bind(pcmds["send"], v, alt=sig)))
+                disposition(disp, mid)
+
+            # Defaults when --owner/--return are omitted, and explicit values still win.
+            tb = work("wd")
+            go("wd", self._bind(pcmds["send"], v, alt="BLOCKED"))
+            st = json.loads(go("lead-1", ["state"]))["tasks"][tb]
+            self.assertEqual((st["status"], st["block"]["owner"], st["block"]["returnCondition"]), ("BLOCKED", "lead-1", "Lead disposition"))
+            tx = work("wx")
+            go("wx", self._bind(pcmds["send"], v, alt="BLOCKED") + ["--owner", "other", "--return", "when X"])
+            self.assertEqual(json.loads(go("lead-1", ["state"]))["tasks"][tx]["block"]["owner"], "other")
+            go("lead-1", self._bind(cmds["send"], v, alt="DEFER"))
+            blk = json.loads(go("lead-1", ["state"]))["tasks"][tx]["block"]
+            self.assertEqual((blk["owner"], blk["returnCondition"]), ("lead-1", "next disposition"))
+
+            # A restricted reviewer's signals, recorded by the Lead.
+            for sig in peer_alts:
+                n[0] += 1
+                v.update({"T": "r%d" % n[0], "PEER": "rv%d" % n[0], "REVIEWER": "rv%d" % n[0]})
+                go("lead-1", self._bind(cmds["brief-review"].replace("--cid C", ""), v))
+                mid = msg(go("lead-1", self._bind(cmds["send-as"], v, alt=sig)))
+                disposition("ANSWER", mid)
+                go("lead-1", self._bind(cmds["review"], v))
+
+            # Candidate (both forms), review, accept; candidate then reject; control and transfer lines.
+            pf = os.path.join(d, "p.patch")
+            with open(pf, "w") as f:
+                f.write("s\n")
+            v.update({"H": hashlib.sha256(b"s\n").hexdigest(), "F": pf})
+            for form in (1, 2):
+                t = work("cw%d" % form)
+                cid = re.search(r"cid=(\w+)", go(v["PEER"], self._bind(pcmds["candidate"], v, pick=form))).group(1)
+                v["C"] = cid
+                go("lead-1", self._bind(cmds["reject"], v))
+                v["opt:--evidence"] = "e2"
+                cid = re.search(r"cid=(\w+)", go(v["PEER"], self._bind(pcmds["candidate"], v, opts=("--evidence",), pick=form))).group(1)
+                v["C"] = cid
+                v.update({"T": t + "r", "PEER": "rr%d" % form, "REVIEWER": "rr%d" % form})
+                go("lead-1", self._bind(cmds["brief-review"], v))
+                go("lead-1", self._bind(cmds["review"], v))
+                v["T"] = t
+                go("lead-1", self._bind(cmds["accept"], v))
+            for alt in ("revoke", "cancel"):
+                t = work("cx" + alt)
+                go("lead-1", self._bind(cmds["control"].replace("revoke|cancel", alt), v))
+            t = work("ctr")
+            go("lead-1", self._bind("control " + cmds["transfer"], v))
+            # Peer-side review of a plan (no candidate) and a watch.
+            n[0] += 1
+            v.update({"T": "pl%d" % n[0], "PEER": "plan-peer", "P": ["pl.py"]})
+            go("lead-1", self._bind(cmds["brief-review"].replace("--cid C", ""), v))
+            go("plan-peer", self._bind(pcmds["review"], v))
 
 
 if __name__ == "__main__":
