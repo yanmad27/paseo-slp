@@ -1152,7 +1152,14 @@ def seat_command(j, a):
         return sent(j, a, a.task, "REJECT", payload={"note": a.note, "ownership": own, "reassignTo": a.reassign}, cid=a.cid)
     if c == "send":
         sig = a.signal.upper().replace("_BRIEF", " BRIEF")
-        return sent(j, a, a.task, sig, to=a.to, payload={"note": a.note, "owner": a.owner, "returnCondition": a.ret})
+        owner, ret = a.owner, a.ret
+        if sig in ("BLOCKED", "DEFER"):
+            room, sender = seat(a, j.state, a.task)
+            if owner is None:
+                owner = j.state["roomLeads"].get(room) if sig == "BLOCKED" else sender
+            if ret is None:
+                ret = "Lead disposition" if sig == "BLOCKED" else "next disposition"
+        return sent(j, a, a.task, sig, to=a.to, payload={"note": a.note, "owner": owner, "returnCondition": ret})
     if c == "control":
         act = a.action
         if act == "lead":
