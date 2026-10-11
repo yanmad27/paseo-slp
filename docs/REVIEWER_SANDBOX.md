@@ -106,10 +106,10 @@ Per-row status from a real `slp-reviewer-check` run. Only the rows below changed
 | `cx-cred-env` | enforced — probed (sandbox-binary only; launcher/Paseo modeId path unverified), codex-cli 0.162.0, macOS arm64, 2026-10-11 |
 | `cx-cred-files` | NOT enforced — probed FAIL (same identity): a credential file under `$HOME` was readable inside the read-only sandbox |
 
-Probe 2026-10-11: Claude login route failed to authenticate (`authentication_failed`); Claude rows remain unverified.
+Probe 2026-10-11: the check printed "the turn ran no steps (no control)" for every Claude row. The `authentication_failed` reason comes from the Claude session transcript in the temp install, not from the check's output. Claude rows remain unverified.
 
-- **Identity:** origin/main `6f09069`, claude 2.1.295, codex-cli 0.162.0, macOS 26 / Darwin 25.6.0 arm64, temp-HOME install, Codex model `gpt-6-luna`, Claude login route.
-- **Turns:** 0 Claude turns completed, 1 Codex turn. Cost not reported.
+- **Identity (as reported by the probe run, not printed by the check):** origin/main `6f09069`, claude 2.1.295, codex-cli 0.162.0, macOS 26 / Darwin 25.6.0 arm64, temp-HOME install, Codex model `gpt-6-luna`, Claude login route.
+- **Turns (as reported by the probe run, not printed by the check):** 0 Claude turns completed, 1 Codex turn. Cost not reported.
 - **Rows:** 7 PASS (5 Codex sandbox-binary rows, 2 presence-only `cfg-*` rows), 1 FAIL (`cx-cred-files`), 19 SKIP (all 14 Claude runtime rows, `cx-net`, `cx-tcp`, `cx-gh`, `cx-tmp`, `cx-tool`).
 - **Scope:** single run; no generalisation to other Codex or Claude versions, platforms, or the Paseo launcher's modeId path.
 
@@ -121,7 +121,7 @@ Probe 2026-10-11: Claude login route failed to authenticate (`authentication_fai
 - **Journal.** `allowWrite` does not override `denyWrite $HOME` (the docs describe re-allowing for reads only) and the Codex reviewer is read-only, so reviewer seats **cannot write the journal**; the `journal` row is kept and expected to report FAIL (blocked), and that is the intended state. No unsandboxed exception is made: the Lead records a reviewer's `REVIEW` for it (`slp-journal review T --as <reviewerId>`, see `docs/ROOM_JOURNAL.md`), so `accept` stays bound to that review.
 - **Repository settings.** A candidate repo's `.claude/settings.json` may add `sandbox.excludedCommands`; this is prompt-only until the provider can pass `--settings`. In `default` mode an excluded command still goes through the permission flow, which refuses it non-interactively; a human approving it in Paseo would defeat that.
 - **Credential denylist is partial**: anything not listed (other dotfiles, project `.env` files) is readable.
-- **Unverified until the self-check passes.** The docs claim these; no probe ran in CI or in this PR's development.
+- **Unverified until the self-check passes.** The docs claim these; no probe ran during the development of PR #68/#70; the first real run is in the Probe record above.
 - **modeId mapping.** Paseo's Codex modes (`auto`, `auto-review`, `full-access`) may set sandbox flags that override the
   launcher's `-c`. The profile uses `auto`; whether `-c` wins is only visible through the `cx-*` rows, which call
   `codex sandbox` with the same `-c` flags and so do **not** test Paseo's mapping. Treat it as unknown.
