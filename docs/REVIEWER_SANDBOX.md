@@ -23,7 +23,46 @@ ran (the sandboxed command reported an exit code; a permitted write worked; a no
 The Claude probe runs in `--permission-mode default`, the seat's real mode, and its `no-prompt` row lists which normal review actions (Read, Grep, Glob, git log/diff/show, a temp-dir script, Skill) were refused.
 `slp-reviewer-check --self-test` runs the same fixture and evaluation logic against stub runners (no `claude`/`codex`), proving the controls can succeed and a leak or a denial is detected; `validate.sh` runs it.
 Rows that need a model turn use `SLP_CHECK_CLAUDE_MODEL` (default `claude-haiku-5-5`) and
-`SLP_CHECK_CODEX_MODEL` (unset: the Codex tool-write row is skipped), and are skipped without a token.
+`SLP_CHECK_CODEX_MODEL` (unset: the Codex tool-write row is skipped).
+
+### Auth for the Claude rows
+
+`SLP_CHECK_CLAUDE_AUTH` picks the route (default `auto`):
+
+- **Token** (`CLAUDE_CODE_OAUTH_TOKEN` set, e.g. from `claude setup-token`): the rendered settings are copied into a fixture `CLAUDE_CONFIG_DIR`, the same load path the seat uses.
+- **Default login** (no token, `auto` or `login`): `CLAUDE_CONFIG_DIR` is left alone so `claude` uses your normal login, and the reviewer settings are passed with `--settings <file>` plus the same flags. The script unsets `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` in the child, so an exported value cannot stand in for the login. `--settings` is merged with your user and project settings (lists and hooks merge), so a login-route row can pass or fail differently from the seat. Every login-route row therefore ends with `[route: login --settings; …]`, and the summary is `SETTINGS-PROBE (claude, login route: …)` with `ENFORCED (claude): none`. Only the token route, which loads the rendered settings through `CLAUDE_CONFIG_DIR` like the seat, can produce `ENFORCED (claude)`.
+  - `--setting-sources` ([CLI reference](https://code.claude.com/docs/en/cli-reference)) is documented as a comma-separated list of `user`, `project`, `local`; an empty list, and so "flag settings only", is not documented, and the check cannot show it without a real run. It is not used.
+  - A turn that cannot authenticate runs no steps, so the rows SKIP with the first lines of `claude`'s stderr when any were captured, plus a hint to log in with `claude`.
+- `SLP_CHECK_CLAUDE_AUTH=token` never falls back to the login: without the token every Claude row SKIPs naming `CLAUDE_CODE_OAUTH_TOKEN`.
+
+The room provider's token in `~/.paseo/config.json` is deliberately never read or used.
+
+```sh
+SLP_CHECK_CLAUDE_AUTH=login ~/.config/slp-room/bin/slp-reviewer-check --runtime claude   # default login; an exported token is unset by the script
+CLAUDE_CODE_OAUTH_TOKEN=... ~/.config/slp-room/bin/slp-reviewer-check --runtime claude   # token route
+```
+
+### Codex invocation and diagnostics
+
+The Codex rows run `codex -c … sandbox -- sh steps.sh …` (current codex-cli: the OS is implied). The older `codex sandbox macos|linux -- …` form is retried, with the same `-c` flags, only when the first attempt exits 2 with a clap-style parser error (`error: unexpected argument`, `error: unrecognized subcommand`, `Usage: codex sandbox`); a runtime denial never retries.
+
+Which errors reach which reasons (first 3 non-empty lines, 200 characters, redacted as above; a source that produced nothing adds nothing):
+
+| Source | Reaches |
+|---|---|
+| `claude` stderr (first turn) | every Claude row SKIPped with "the turn ran no steps", and the tool and no-prompt SKIPs |
+| second `claude` turn stderr (repo-settings) | the `repo-settings` SKIP |
+| `jq` parse errors on the transcripts, read when each row is emitted | the tool, no-prompt and repo-settings SKIPs and the `cx-tool` SKIP |
+| reading `steps.log` / the control Write marker | "ran no steps" rows / the tool SKIP for the missing control Write |
+| `jq` check of the rendered settings | the `cfg-claude` FAIL |
+| `codex sandbox` stderr (and the legacy attempt's) | the `cx-*` SKIPs when the control read did not run |
+| copying the Codex runtime to the fixture | the `cx-*` SKIPs when codex is unusable |
+| `codex-reviewer exec` stderr | the `cx-tool` SKIP |
+| outside-network controls (curl, TCP connect) and the in-sandbox client's error | the `net` / `tcp` (`cx-net` / `cx-tcp`) SKIPs |
+| fixture `mktemp` error inside the steps | the `tmp` FAIL |
+| `git rev-parse` of the pushed ref in the bare remote (exit 1 with no stderr = ref absent) | the `push` / `cx-push` SKIP when the remote cannot be inspected (exit 128, fatal message); never a PASS |
+
+Not covered: the `emit` log append inside the steps, trap cleanup and `command -v` / `grep -q` tests (none decides a row by itself), and any failure whose tool prints nothing. Results change no label: a row reaches `ENFORCED` only with an observed denial, and in the Claude summary only on the token route (the login route prints `SETTINGS-PROBE`; the Codex summary keeps its own sandbox-binary `ENFORCED` line).
 
 ## What is configured, and what is proven
 
