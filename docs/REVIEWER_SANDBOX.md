@@ -93,6 +93,26 @@ denies writes under the whole `$HOME` (the docs say `denyWrite` applies "includi
 otherwise writable"). Sources outside `$HOME` and the temp dirs are not covered: set `SLP_REVIEWER_DENY_WRITE=/abs/path:/other` (absolute paths only; relative entries abort the install) when running
 `install.sh`. A source under `/tmp` stays writable. Codex needs no such path: read-only has no writable cwd.
 
+## Probe record
+
+Per-row status from a real `slp-reviewer-check` run. Only the rows below changed; every other row keeps its label above.
+
+| Row | Status |
+|---|---|
+| `cx-redirect` | enforced — probed (sandbox-binary only; launcher/Paseo modeId path unverified), codex-cli 0.162.0, macOS arm64, 2026-10-11 |
+| `cx-script` | enforced — probed (sandbox-binary only; launcher/Paseo modeId path unverified), codex-cli 0.162.0, macOS arm64, 2026-10-11 |
+| `cx-symlink` | enforced — probed (sandbox-binary only; launcher/Paseo modeId path unverified), codex-cli 0.162.0, macOS arm64, 2026-10-11 |
+| `cx-push` | enforced — probed (sandbox-binary only; launcher/Paseo modeId path unverified), codex-cli 0.162.0, macOS arm64, 2026-10-11 |
+| `cx-cred-env` | enforced — probed (sandbox-binary only; launcher/Paseo modeId path unverified), codex-cli 0.162.0, macOS arm64, 2026-10-11 |
+| `cx-cred-files` | NOT enforced — probed FAIL (same identity): a credential file under `$HOME` was readable inside the read-only sandbox |
+
+Probe 2026-10-11: the check printed "the turn ran no steps (no control)" for every Claude row. The `authentication_failed` reason comes from the Claude session transcript in the temp install, not from the check's output. Claude rows remain unverified.
+
+- **Identity (as reported by the probe run, not printed by the check):** origin/main `6f09069`, claude 2.1.295, codex-cli 0.162.0, macOS 26 / Darwin 25.6.0 arm64, temp-HOME install, Codex model `gpt-6-luna`, Claude login route.
+- **Turns (as reported by the probe run, not printed by the check):** 0 Claude turns completed, 1 Codex turn. Cost not reported.
+- **Rows:** 7 PASS (5 Codex sandbox-binary rows, 2 presence-only `cfg-*` rows), 1 FAIL (`cx-cred-files`), 19 SKIP (all 14 Claude runtime rows, `cx-net`, `cx-tcp`, `cx-gh`, `cx-tmp`, `cx-tool`).
+- **Scope:** single run; no generalisation to other Codex or Claude versions, platforms, or the Paseo launcher's modeId path.
+
 ## Limits
 
 - **Snapshots under `/tmp` or `$TMPDIR` are not protected.** The Edit/Write tools and sandboxed Bash may write the temp dirs (that is where reviewers run checks), so a candidate snapshot placed there can be modified by the reviewer; only sources under `$HOME` or `SLP_REVIEWER_DENY_WRITE` paths are protected. Keep snapshots outside the temp dirs.
@@ -101,7 +121,7 @@ otherwise writable"). Sources outside `$HOME` and the temp dirs are not covered:
 - **Journal.** `allowWrite` does not override `denyWrite $HOME` (the docs describe re-allowing for reads only) and the Codex reviewer is read-only, so reviewer seats **cannot write the journal**; the `journal` row is kept and expected to report FAIL (blocked), and that is the intended state. No unsandboxed exception is made: the Lead records a reviewer's `REVIEW` for it (`slp-journal review T --as <reviewerId>`, see `docs/ROOM_JOURNAL.md`), so `accept` stays bound to that review.
 - **Repository settings.** A candidate repo's `.claude/settings.json` may add `sandbox.excludedCommands`; this is prompt-only until the provider can pass `--settings`. In `default` mode an excluded command still goes through the permission flow, which refuses it non-interactively; a human approving it in Paseo would defeat that.
 - **Credential denylist is partial**: anything not listed (other dotfiles, project `.env` files) is readable.
-- **Unverified until the self-check passes.** The docs claim these; no probe ran in CI or in this PR's development.
+- **Unverified until the self-check passes.** The docs claim these; no probe ran during the development of PR #68/#70; the first real run is in the Probe record above.
 - **modeId mapping.** Paseo's Codex modes (`auto`, `auto-review`, `full-access`) may set sandbox flags that override the
   launcher's `-c`. The profile uses `auto`; whether `-c` wins is only visible through the `cx-*` rows, which call
   `codex sandbox` with the same `-c` flags and so do **not** test Paseo's mapping. Treat it as unknown.
