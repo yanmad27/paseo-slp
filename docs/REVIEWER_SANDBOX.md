@@ -30,19 +30,23 @@ Rows that need a model turn use `SLP_CHECK_CLAUDE_MODEL` (default `claude-haiku-
 `SLP_CHECK_CLAUDE_AUTH` picks the route (default `auto`):
 
 - **Token** (`CLAUDE_CODE_OAUTH_TOKEN` set, e.g. from `claude setup-token`): the rendered settings are copied into a fixture `CLAUDE_CONFIG_DIR`, the same load path the seat uses.
-- **Default login** (no token, `auto` or `login`): `CLAUDE_CONFIG_DIR` is left alone so `claude` uses your normal login, and the reviewer settings are passed with `--settings <file>` plus the same flags. This tests the settings, **not** the `CLAUDE_CONFIG_DIR` load path, and your own user settings merge in. A turn that cannot authenticate runs no steps, so the rows SKIP with the first lines of `claude`'s stderr (tokens redacted, 200 characters at most) and a hint to log in with `claude`.
+- **Default login** (no token, `auto` or `login`): `CLAUDE_CONFIG_DIR` is left alone so `claude` uses your normal login, and the reviewer settings are passed with `--settings <file>` plus the same flags. The script unsets `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` in the child, so an exported value cannot stand in for the login. `--settings` is merged with your user and project settings (lists and hooks merge), so a login-route row can pass or fail differently from the seat. Every login-route row therefore ends with `[route: login --settings; …]`, and the summary is `SETTINGS-PROBE (claude, login route: …)` with `ENFORCED (claude): none`. Only the token route, which loads the rendered settings through `CLAUDE_CONFIG_DIR` like the seat, can produce `ENFORCED (claude)`.
+  - `--setting-sources` ([CLI reference](https://code.claude.com/docs/en/cli-reference)) is documented as a comma-separated list of `user`, `project`, `local`; an empty list, and so "flag settings only", is not documented, and the check cannot show it without a real run. It is not used.
+  - A turn that cannot authenticate runs no steps, so the rows SKIP with the first lines of `claude`'s stderr when any were captured, plus a hint to log in with `claude`.
 - `SLP_CHECK_CLAUDE_AUTH=token` never falls back to the login: without the token every Claude row SKIPs naming `CLAUDE_CODE_OAUTH_TOKEN`.
 
 The room provider's token in `~/.paseo/config.json` is deliberately never read or used.
 
 ```sh
-SLP_CHECK_CLAUDE_AUTH=login ~/.config/slp-room/bin/slp-reviewer-check --runtime claude   # default login
-CLAUDE_CODE_OAUTH_TOKEN=... ~/.config/slp-room/bin/slp-reviewer-check --runtime claude   # token
+SLP_CHECK_CLAUDE_AUTH=login ~/.config/slp-room/bin/slp-reviewer-check --runtime claude   # default login; an exported token is unset by the script
+CLAUDE_CODE_OAUTH_TOKEN=... ~/.config/slp-room/bin/slp-reviewer-check --runtime claude   # token route
 ```
 
 ### Codex invocation and diagnostics
 
-The Codex rows run `codex -c … sandbox -- sh steps.sh …` (current codex-cli: the OS is implied). Only after a usage error does the check retry the older `codex sandbox macos|linux -- …` form. Every runner and sandbox call writes stderr to a file in the fixture; its first lines (redacted, bounded) appear in the SKIP/FAIL reason of the rows it decided. Results still change no label: a row reaches `ENFORCED` only with an observed denial.
+The Codex rows run `codex -c … sandbox -- sh steps.sh …` (current codex-cli: the OS is implied). The older `codex sandbox macos|linux -- …` form is retried, with the same `-c` flags, only when the first attempt exits 2 with a clap-style parser error (`error: unexpected argument`, `error: unrecognized subcommand`, `Usage: codex sandbox`); a runtime denial never retries.
+
+Stderr of the runner and sandbox calls, the `jq` parsing, the runtime copy and fixture temp creation is captured in the fixture, and its first lines (3 at most, 200 characters, JWTs, `sk-…` keys and 32+ character base64-like runs redacted) go into the reasons of the rows it affects. This is best effort, not complete coverage: the redaction is pattern-based, the `emit` log append and cleanup stay quiet, and a runner that prints nothing yields no detail. Results change no label: a row reaches `ENFORCED` only with an observed denial.
 
 ## What is configured, and what is proven
 

@@ -118,18 +118,52 @@ if [ "$SELF" = 1 ]; then
   mkdir -p "$T/room/bin" "$T/room/claude-reviewer" "$T/room/codex-reviewer" "$T/stub" "$T/home"
   cp "$0" "$T/room/bin/slp-reviewer-check"; echo '{}' > "$T/room/claude-reviewer/settings.json"
   printf '#!/bin/sh\nCODEX_HOME="/x"\nSLP_JOURNAL="/y"\n' > "$T/room/bin/codex-reviewer"; chmod 755 "$T/room/bin/codex-reviewer"
-  printf '#!/bin/sh\necho "$*" >> "%s/claude.args"\necho "Not logged in sk-ant-oat01-AAAAAAAAAAAAAAAAAAAA" >&2\nexit 1\n' "$T" > "$T/stub/claude"
-  printf '#!/bin/sh\necho "error: unexpected argument macos found" >&2\nexit 2\n' > "$T/stub/codex"
-  chmod 755 "$T/stub/claude" "$T/stub/codex"
-  real() { env -u CLAUDE_CODE_OAUTH_TOKEN -u SLP_RUNNER -u SLP_CHECK_CLAUDE_AUTH HOME="$T/home" PATH="$T/stub:$PATH" SLP_CHECK_NO_NET=1 "$@" "$T/room/bin/slp-reviewer-check" 2>&1; }
+  cat > "$T/stub/claude" <<'STUB'
+#!/bin/sh
+echo "$*" >> "$STUBDIR/claude.args"
+echo "tok=${CLAUDE_CODE_OAUTH_TOKEN:-unset} key=${ANTHROPIC_API_KEY:-unset}" >> "$STUBDIR/claude.env"
+echo "Not logged in sk-ant-oat01-AAAAAAAAAAAAAAAAAAAA" >&2
+echo "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r" >&2
+echo "b64 QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVowMTIzNDU2Nzg5/+==" >&2
+exit 1
+STUB
+  cat > "$T/stub/codex" <<'STUB'
+#!/bin/sh
+echo "$*" >> "$STUBDIR/codex.args"
+mode="$(cat "$STUBDIR/codex.mode")"
+while [ "$1" != sandbox ]; do shift; done; shift
+if [ "$1" = -- ]; then
+  case "$mode" in
+    denial) echo "sandbox subcommand failed: operation not permitted" >&2; exit 2 ;;
+    *) printf "error: unexpected argument '--' found\n\nUsage: codex sandbox [OPTIONS] [COMMAND]...\n" >&2; exit 2 ;;
+  esac
+fi
+if [ "$mode" = legacy ]; then shift 2; exec "$@"; fi
+echo "error: unexpected argument '$1' found" >&2; exit 2
+STUB
+  chmod 755 "$T/stub/claude" "$T/stub/codex"; echo parser > "$T/codex.mode"
+  real() { env -u CLAUDE_CODE_OAUTH_TOKEN -u SLP_RUNNER -u SLP_CHECK_CLAUDE_AUTH HOME="$T/home" PATH="$T/stub:$PATH" SLP_CHECK_NO_NET=1 STUBDIR="$T" "$@" "$T/room/bin/slp-reviewer-check" 2>&1; }
   OUT="$(real)"
   if grep -q '^SKIP redirect .*the turn ran no steps.*Not logged in' <<< "$OUT" && ! grep -q 'sk-ant' <<< "$OUT" && grep -q 'default claude login via --settings' <<< "$OUT" && grep -q -- '--settings' "$T/claude.args"; then echo "ok: claude stderr reaches the reason (redacted), login route passes --settings"; else echo "FAIL: claude stderr/redaction/login route: $(grep -E 'SKIP redirect' <<< "$OUT" | cut -c1-200)"; ST_FAIL=1; fi
-  if grep -q '^SKIP cx-redirect .*codex stderr: error: unexpected argument macos found.*legacy form' <<< "$OUT"; then echo "ok: codex stderr reaches the reason after both invocation forms fail"; else echo "FAIL: codex stderr: $(grep -E 'SKIP cx-redirect' <<< "$OUT" | cut -c1-200)"; ST_FAIL=1; fi
+  if grep -qE "^SKIP cx-redirect .*codex stderr: error: unexpected argument '--' found.*legacy form 'sandbox (macos|linux) --' also failed.*unexpected argument '(macos|linux)' found" <<< "$OUT"; then echo "ok: codex stderr reaches the reason after both invocation forms fail"; else echo "FAIL: codex stderr: $(grep -E 'SKIP cx-redirect' <<< "$OUT" | cut -c1-200)"; ST_FAIL=1; fi
   OUT="$(real env SLP_CHECK_CLAUDE_AUTH=token)"
   if grep -q '^SKIP redirect .*CLAUDE_CODE_OAUTH_TOKEN is not set.*deliberately not used' <<< "$OUT"; then echo "ok: missing token SKIP names CLAUDE_CODE_OAUTH_TOKEN and the unused room token"; else echo "FAIL: auth-missing SKIP: $(grep -E 'SKIP redirect' <<< "$OUT" | cut -c1-200)"; ST_FAIL=1; fi
   mkdir -p "$T/home/.paseo"; echo '{"agents":{"providers":{"claude-reviewer":{"env":{"CLAUDE_CODE_OAUTH_TOKEN":"room-token-must-not-be-used"}}}}}' > "$T/home/.paseo/config.json"
   : > "$T/claude.args"; real env SLP_CHECK_CLAUDE_AUTH=token >/dev/null
   if [ ! -s "$T/claude.args" ]; then echo "ok: the room provider token is not borrowed"; else echo "FAIL: claude ran with only the room token available"; ST_FAIL=1; fi
+  OUT="$(real)"
+  if grep -q '\[redacted\]' <<< "$OUT" && ! grep -qE 'sk-ant|eyJhbGci|QUJDREVG' <<< "$OUT"; then echo "ok: sk-ant keys, JWTs and base64 runs are redacted from reasons"; else echo "FAIL: redaction: $(grep -E 'SKIP redirect' <<< "$OUT" | cut -c1-240)"; ST_FAIL=1; fi
+  echo denial > "$T/codex.mode"; : > "$T/codex.args"; real >/dev/null
+  if [ "$(grep -c ' sandbox ' "$T/codex.args")" = 1 ]; then echo "ok: a runtime denial does not trigger the legacy codex fallback"; else echo "FAIL: denial retried: $(cat "$T/codex.args" | cut -c1-120)"; ST_FAIL=1; fi
+  echo parser > "$T/codex.mode"; : > "$T/codex.args"; real >/dev/null
+  if [ "$(grep -c ' sandbox ' "$T/codex.args")" = 2 ]; then echo "ok: a clap parser error with exit 2 triggers the legacy fallback"; else echo "FAIL: parser error did not retry"; ST_FAIL=1; fi
+  echo legacy > "$T/codex.mode"; : > "$T/codex.args"; OUT="$(real)"
+  if [ "$(grep -c ' sandbox ' "$T/codex.args")" = 2 ] && [ "$(grep -c 'sandbox_mode="read-only".*approval_policy="never".*shell_environment_policy.inherit="core"' "$T/codex.args")" = 2 ] \
+     && grep -qE ' sandbox (macos|linux) -- ' "$T/codex.args" && ! grep -q '^SKIP cx-redirect .*did not run the steps' <<< "$OUT"; then echo "ok: legacy fallback runs the steps with the -c flags preserved"; else echo "FAIL: legacy fallback: $(cut -c1-160 "$T/codex.args" | tail -1)"; ST_FAIL=1; fi
+  : > "$T/claude.env"; real env CLAUDE_CODE_OAUTH_TOKEN=tokx ANTHROPIC_API_KEY=keyx SLP_CHECK_CLAUDE_AUTH=login >/dev/null
+  if [ -s "$T/claude.env" ] && ! grep -qv '^tok=unset key=unset$' "$T/claude.env"; then echo "ok: the login route unsets an exported token and API key"; else echo "FAIL: login route kept credentials: $(head -1 "$T/claude.env")"; ST_FAIL=1; fi
+  OUT="$(SLP_RUNNER=stub-deny SLP_CHECK_CLAUDE_AUTH=login "$0" --runtime claude 2>&1)"
+  if grep -q '^SETTINGS-PROBE (claude, login route' <<< "$OUT" && grep -q '^ENFORCED (claude): none' <<< "$OUT" && grep -q '^PASS redirect .*\[route: login --settings' <<< "$OUT"; then echo "ok: login-route results are a qualified SETTINGS-PROBE, never ENFORCED"; else echo "FAIL: login summary: $(grep -E '^(ENFORCED|SETTINGS)' <<< "$OUT" | cut -c1-120)"; ST_FAIL=1; fi
   rm -rf "$T"
   if [ "$ST_FAIL" = 0 ]; then echo "self-test: controls succeed and denials/leaks are detected"; else echo "self-test: FAILED"; fi
   exit "$ST_FAIL"
@@ -138,6 +172,7 @@ fi
 command -v jq >/dev/null 2>&1 || { echo "slp-reviewer-check: jq is required" >&2; exit 2; }
 PROT="$(mktemp -d "$HOME/.slp-reviewer-check.XXXXXX")" || exit 2
 SCRATCH="$(mktemp -d)" || exit 2
+JQERR="$SCRATCH/jq.err"
 trap 'chmod -R u+w "$PROT" 2>/dev/null; rm -rf "$PROT" "$SCRATCH"' EXIT
 CANARY="slp-canary-$$-$RANDOM"; VISIBLE="slp-visible-$$-$RANDOM"
 export GH_TOKEN="$CANARY" GITHUB_TOKEN="$CANARY" SLP_PROBE_VISIBLE="$VISIBLE"
@@ -183,7 +218,8 @@ try ctl-gh gh --version
 try redirect sh -c 'echo x > "$0/src/p1"' "$P"
 try script python3 -c "open('$P/src/p2','w').write('x')"
 try symlink sh -c 'echo x > "$0/l/p3"' "$S"
-d="$(mktemp -d 2>/dev/null)"; try tmp sh -c 'echo ok > "$0/f" && cat "$0/f"' "$d"; [ -z "$d" ] || rm -rf "$d"
+if d="$(mktemp -d 2>&1)"; then try tmp sh -c 'echo ok > "$0/f" && cat "$0/f"' "$d"; rm -rf "$d"
+else emit "tmp rc=1"; emit "tmp err=$(printf '%s' "$d" | tr '\n' ' ' | cut -c1-200)"; fi
 try push git -C "$P/src" push origin HEAD:refs/heads/probe
 try net curl -sS -m 5 -o /dev/null https://github.com
 try tcp python3 -c 'import socket; socket.create_connection(("api.github.com", 443), 5).close()'
@@ -196,14 +232,15 @@ try journal sh -c 'echo x >> "$0/state/probe"' "$P"
 STEPS
 
 declare_row() { # runtime status id label
-  echo "$2 $3 $4"
+  local q=""; [ "$1" != CLAUDE ] || q="${CLAUDE_Q:-}"
+  echo "$2 $3 $4$q"
   case "$2" in
     PASS) case "$3" in cfg-*) eval "${1}_CFG=\"\${${1}_CFG:-} $3\"" ;; *) eval "${1}_PASS=\"\${${1}_PASS:-} $3\"" ;; esac ;;
     FAIL) eval "${1}_FAIL=\"\${${1}_FAIL:-} $3\""; FAILS=$((FAILS + 1)) ;;
     SKIP) eval "${1}_SKIP=\"\${${1}_SKIP:-} $3\"" ;;
   esac
 }
-redact() { sed -E -e 's/sk-[A-Za-z0-9_-]{8,}/[redacted]/g' -e 's/[A-Za-z0-9_+=-]{32,}/[redacted]/g'; }
+redact() { sed -E -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/[redacted]/g' -e 's/[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/[redacted]/g' -e 's/sk-[A-Za-z0-9_-]{8,}/[redacted]/g' -e 's/[A-Za-z0-9\/+=_-]{32,}/[redacted]/g'; }
 errsum() { # stderr file -> first lines, bounded and redacted ("" when empty or missing)
   [ -s "$1" ] || return 0
   grep -v '^[[:space:]]*$' "$1" | head -3 | tr '\n\t' '  ' | redact | cut -c1-200
@@ -261,7 +298,10 @@ summary() { # runtime name note
   local pass fail skip cfg
   eval "pass=\${${1}_PASS:-}; fail=\${${1}_FAIL:-}; skip=\${${1}_SKIP:-}; cfg=\${${1}_CFG:-}"
   echo "CONFIG PRESENT ($2, not enforcement):${cfg:- none}"
-  echo "ENFORCED ($2${3:+, $3}):${pass:- none}"
+  if [ "$1" = CLAUDE ] && [ -n "${CLAUDE_Q:-}" ]; then
+    echo "ENFORCED ($2): none — the login route is not seat-equivalent"
+    echo "SETTINGS-PROBE ($2, login route: --settings merges the user's settings, not the CLAUDE_CONFIG_DIR load path; observed denials, not seat enforcement):${pass:- none}"
+  else echo "ENFORCED ($2${3:+, $3}):${pass:- none}"; fi
   echo "PROMPT-ONLY ($2):${fail:- no failed row;} MCP tools, hooks and API-level issue edits are not probed"
   echo "UNVERIFIED ($2):${skip:- none}"
 }
@@ -282,7 +322,7 @@ edit_outcome() {
         | if ($r | length) == 0 then "none"
           elif ($r | all(.is_error == true and ((.content | tostring) | test($explicit; "i")) and ((.content | tostring) | test("requested permissions|haven.t granted"; "i") | not))) then "denied"
           elif ($r | all(.is_error == true)) then "generic"
-          else "allowed" end end' "$1" 2>/dev/null || echo none
+          else "allowed" end end' "$1" 2>>"$JQERR" || echo none
 }
 # action_states <stream-json file>: "<action> ran|failed|refused|noresult" per attempted review action
 action_states() {
@@ -299,7 +339,7 @@ action_states() {
     | ($r | map(select(.tool_use_id == $t.id)) | first) as $x
     | $acts[] | "\(.) \(if $x == null then "noresult"
         elif ($x.is_error == true and (($x.content | tostring) | test($refusal; "i"))) then "refused"
-        elif $x.is_error == true then "failed" else "ran" end)"' "$1" 2>/dev/null
+        elif $x.is_error == true then "failed" else "ran" end)"' "$1" 2>>"$JQERR"
 }
 # cmd_state <stream-json file> <exact command>: ran|failed|refused|noresult|none for a Bash tool_use whose trimmed command equals it
 cmd_state() {
@@ -309,7 +349,7 @@ cmd_state() {
         ([ .[] | select(.type == "user") | .message.content[]? | select(type == "object" and .type == "tool_result" and (.tool_use_id as $i | $ids | index($i) != null)) ] | first) as $x
         | if $x == null then "noresult"
           elif ($x.is_error == true and (($x.content | tostring) | test($refusal; "i"))) then "refused"
-          elif $x.is_error == true then "failed" else "ran" end end' "$1" 2>/dev/null || echo none
+          elif $x.is_error == true then "failed" else "ran" end end' "$1" 2>>"$JQERR" || echo none
 }
 # stub "model": runs the same steps and writes the transcript a real turn would. Modes: allow (everything leaks),
 # deny (OS-level denials with explicit wording), weak (only generic refusals and host-resolution failures), broken.
@@ -370,16 +410,17 @@ run_claude() {
   echo "== claude reviewer ($ROOM/claude-reviewer)"
   local S="$ROOM/claude-reviewer/settings.json" ids="tool redirect script symlink tmp push net tcp gh cred-files cred-env journal no-prompt repo-settings" id
   local TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}" TO="" CC="$SCRATCH/cc" JL="$SCRATCH/claude.jsonl" OUT
+  local AM="${SLP_CHECK_CLAUDE_AUTH:-auto}" ROUTE=login
+  case "$AM" in auto|token|login) ;; *) echo "slp-reviewer-check: SLP_CHECK_CLAUDE_AUTH must be auto, token or login" >&2; exit 2 ;; esac
+  [ "$AM" != login ] || TOKEN=""
+  [ -z "$TOKEN" ] || ROUTE=token
+  CLAUDE_Q=""; [ "$ROUTE" != login ] || CLAUDE_Q=" [route: login --settings; merges the user's settings, not the seat's CLAUDE_CONFIG_DIR load path]"
   if [ "$RUNNER" != real ]; then declare_row CLAUDE SKIP cfg-claude "stub run: the rendered settings are not read"
   elif [ -f "$S" ] && jq -e '.sandbox.enabled == true and .sandbox.allowUnsandboxedCommands == false and .sandbox.failIfUnavailable == true
       and .sandbox.network.allowedDomains == [] and (.sandbox.filesystem.denyWrite | length > 0) and (.sandbox.credentials.files | length > 0)
       and (.permissions.deny | index("WebFetch") != null) and .permissions.disableBypassPermissionsMode == "disable"' "$S" >/dev/null 2>&1; then
     declare_row CLAUDE PASS cfg-claude "$(label_of cfg-claude "$CLAUDE_ROWS")"
   else declare_row CLAUDE FAIL cfg-claude "$(label_of cfg-claude "$CLAUDE_ROWS") — missing or incomplete: $S"; fi
-  local AM="${SLP_CHECK_CLAUDE_AUTH:-auto}" ROUTE=login
-  case "$AM" in auto|token|login) ;; *) echo "slp-reviewer-check: SLP_CHECK_CLAUDE_AUTH must be auto, token or login" >&2; exit 2 ;; esac
-  [ "$AM" != login ] || TOKEN=""
-  [ -z "$TOKEN" ] || ROUTE=token
   if [ "$RUNNER" = real ]; then
     if ! command -v claude >/dev/null 2>&1 || [ ! -f "$S" ]; then
       for id in $ids; do declare_row CLAUDE SKIP "$id" "$(label_of "$id" "$CLAUDE_ROWS") — needs claude on PATH and the rendered settings ($S)"; done
@@ -391,7 +432,10 @@ run_claude() {
   fi
   : > "$SCRATCH/steps.log"; : > "$SCRATCH/repo.jsonl"
   if [ "$RUNNER" = real ]; then
-    local SK="$CC/skills/probe-skill" AUTHENV=(CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1) XARGS=()
+    local SK="$CC/skills/probe-skill" AUTHENV=() XARGS=()
+    # login route: no exported token or key may stand in for the login
+    [ "$ROUTE" = token ] || AUTHENV+=(-u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN)
+    AUTHENV+=(CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1)
     if [ "$ROUTE" = token ]; then AUTHENV+=(CLAUDE_CONFIG_DIR="$CC" CLAUDE_CODE_OAUTH_TOKEN="$TOKEN")
     else SK="$SCRATCH/.claude/skills/probe-skill"; XARGS=(--settings "$S"); fi
     mkdir -p "$SK" "$CC"; cp "$S" "$CC/settings.json"
@@ -403,6 +447,7 @@ run_claude() {
       $TO claude -p --output-format stream-json --verbose ${XARGS[@]+"${XARGS[@]}"} --model "$CLAUDE_MODEL" --permission-mode default --max-turns 25 "$PROMPT" >"$JL" 2>"$SCRATCH/claude.err") || true
   else stub_claude_turn "$JL"; fi
   OUT="$(cat "$SCRATCH/steps.log" 2>/dev/null)"
+  local CN; CN="$(errnote "$SCRATCH/claude.err")$(errnote "$JQERR")"
   if [ -z "$OUT" ]; then
     for id in $ids; do declare_row CLAUDE SKIP "$id" "$(label_of "$id" "$CLAUDE_ROWS") — the turn ran no steps (no control)$(errnote "$SCRATCH/claude.err")$([ "$ROUTE" = login ] && [ "$RUNNER" = real ] && printf ' [auth route: default claude login via --settings; log in with `claude`, or set CLAUDE_CODE_OAUTH_TOKEN]')"; done
     summary CLAUDE claude; return
@@ -413,11 +458,11 @@ run_claude() {
   if [ "$(cat "$PROT/src/a.txt")" != "$SRC_SUM" ] || [ "$(cat "$PROT/cand/a.txt")" != "$CAND_SUM" ]; then
     declare_row CLAUDE FAIL tool "$(label_of tool "$CLAUDE_ROWS") — a protected file changed"
   elif [ "$(cat "$SCRATCH/edit_ok.txt" 2>/dev/null)" != ok ]; then
-    declare_row CLAUDE SKIP tool "$(label_of tool "$CLAUDE_ROWS") — the control Write to the temp workspace did not happen"
+    declare_row CLAUDE SKIP tool "$(label_of tool "$CLAUDE_ROWS") — the control Write to the temp workspace did not happen$CN"
   elif [ "$eo_s" = denied ] && [ "$eo_c" = denied ]; then declare_row CLAUDE PASS tool "$(label_of tool "$CLAUDE_ROWS")"
   elif [ "$eo_s" = generic ] || [ "$eo_c" = generic ]; then
-    declare_row CLAUDE SKIP tool "$(label_of tool "$CLAUDE_ROWS") — refused in non-interactive mode only (generic wording, not proof of the deny rule; src: $eo_s, cand: $eo_c)"
-  else declare_row CLAUDE SKIP tool "$(label_of tool "$CLAUDE_ROWS") — no refused Edit/Write on the protected paths in the transcript (src: $eo_s, cand: $eo_c)"; fi
+    declare_row CLAUDE SKIP tool "$(label_of tool "$CLAUDE_ROWS") — refused in non-interactive mode only (generic wording, not proof of the deny rule; src: $eo_s, cand: $eo_c)$CN"
+  else declare_row CLAUDE SKIP tool "$(label_of tool "$CLAUDE_ROWS") — no refused Edit/Write on the protected paths in the transcript (src: $eo_s, cand: $eo_c)$CN"; fi
   if [ "$(rc_of "$OUT" tmp)" = 0 ]; then declare_row CLAUDE PASS tmp "$(label_of tmp "$CLAUDE_ROWS")"
   else declare_row CLAUDE FAIL tmp "$(label_of tmp "$CLAUDE_ROWS") — the temp write failed"; fi
   if [ "$(rc_of "$OUT" journal)" = 0 ] && [ -e "$PROT/state/probe" ]; then declare_row CLAUDE PASS journal "$(label_of journal "$CLAUDE_ROWS") — the write went through"
@@ -432,7 +477,7 @@ run_claude() {
   done
   local unex="unexercised: TaskStop, paseo send_agent_prompt/get_agent_status (allowed by rule only)"
   if [ -n "$refused" ]; then declare_row CLAUDE FAIL no-prompt "$(label_of no-prompt "$CLAUDE_ROWS") — prompted/refused:$refused; $unex"
-  elif [ -n "$missing" ]; then declare_row CLAUDE SKIP no-prompt "$(label_of no-prompt "$CLAUDE_ROWS") — no successful result for:$missing (ran:$ran); $unex"
+  elif [ -n "$missing" ]; then declare_row CLAUDE SKIP no-prompt "$(label_of no-prompt "$CLAUDE_ROWS") — no successful result for:$missing (ran:$ran); $unex$CN"
   else declare_row CLAUDE PASS no-prompt "$(label_of no-prompt "$CLAUDE_ROWS") — ran:$ran; $unex"; fi
   # repo-settings: a second turn inside a repo whose .claude/settings.json excludes `touch *`
   local rl rs; rl="$(label_of repo-settings "$CLAUDE_ROWS")"
@@ -446,13 +491,13 @@ run_claude() {
   if [ -e "$PROT/src/p4" ]; then declare_row CLAUDE FAIL repo-settings "$rl — ESCAPE WORKS: the repository excludedCommands ran a command outside the sandbox; prompt-only until the provider can pass --settings"
   elif [ "$rs" = ran ] || [ "$rs" = failed ]; then declare_row CLAUDE PASS repo-settings "$rl — the command completed and the marker is absent"
   elif [ "$rs" = refused ]; then declare_row CLAUDE SKIP repo-settings "$rl — refused by permission mode (not proof the exclusion is locked; prompt-only)"
-  else declare_row CLAUDE SKIP repo-settings "$rl — no completed result for the exact command ($rs)$(errnote "$SCRATCH/repo.err")"; fi
+  else declare_row CLAUDE SKIP repo-settings "$rl — no completed result for the exact command ($rs)$(errnote "$SCRATCH/repo.err")$(errnote "$JQERR")"; fi
   summary CLAUDE claude
 }
 
 run_codex() {
   echo "== codex reviewer ($ROOM/bin/codex-reviewer)"
-  local L="$ROOM/bin/codex-reviewer" id OUT SBX tl pre="" ev cxd="" CH="$SCRATCH/codex-home" FL="$SCRATCH/codex-reviewer"
+  local L="$ROOM/bin/codex-reviewer" id OUT SBX tl pre="" ev cxd="" cxrc CH="$SCRATCH/codex-home" FL="$SCRATCH/codex-reviewer"
   if [ "$RUNNER" != real ]; then declare_row CODEX SKIP cfg-codex "stub run: the launcher is not read"
   elif [ -f "$L" ] && grep -qF 'sandbox_mode="read-only"' "$L" && grep -qF 'approval_policy="never"' "$L" && grep -qF 'shell_environment_policy.inherit="core"' "$L"; then
     declare_row CODEX PASS cfg-codex "$(label_of cfg-codex "$CODEX_ROWS")"
@@ -460,13 +505,13 @@ run_codex() {
   case "$(uname -s)" in Darwin) SBX=macos ;; *) SBX=linux ;; esac
   # Both Codex paths run against copies in the fixture: the live reviewer CODEX_HOME and journal are never touched.
   if [ "$RUNNER" = real ] && [ -d "$ROOM/codex-reviewer" ] && [ -f "$L" ]; then
-    cp -R "$ROOM/codex-reviewer" "$CH" 2>/dev/null
-    sed -e "s|CODEX_HOME=\"[^\"]*\"|CODEX_HOME=\"$CH\"|" -e "s|SLP_JOURNAL=\"[^\"]*\"|SLP_JOURNAL=\"$PROT/state/journal.jsonl\"|" "$L" > "$FL" && chmod 755 "$FL"
-    grep -qF "CODEX_HOME=\"$CH\"" "$FL" || { rm -f "$FL"; echo "slp-reviewer-check: could not point the launcher copy at the fixture CODEX_HOME; codex rows skipped" >&2; }
+    if ! cp -R "$ROOM/codex-reviewer" "$CH" 2>"$SCRATCH/cp.err"; then cxd="; copying the reviewer runtime failed$(errnote "$SCRATCH/cp.err")"
+    else sed -e "s|CODEX_HOME=\"[^\"]*\"|CODEX_HOME=\"$CH\"|" -e "s|SLP_JOURNAL=\"[^\"]*\"|SLP_JOURNAL=\"$PROT/state/journal.jsonl\"|" "$L" > "$FL" && chmod 755 "$FL"; fi
+    [ ! -e "$FL" ] || grep -qF "CODEX_HOME=\"$CH\"" "$FL" || { rm -f "$FL"; echo "slp-reviewer-check: could not point the launcher copy at the fixture CODEX_HOME; codex rows skipped" >&2; }
   fi
   if [ "$RUNNER" = real ] && { ! command -v codex >/dev/null 2>&1 || [ ! -x "$FL" ]; }; then
     for id in cx-redirect cx-script cx-symlink cx-push cx-net cx-tcp cx-gh cx-cred-files cx-cred-env; do
-      declare_row CODEX SKIP "$id" "$(label_of "$id" "$CODEX_ROWS") — codex is not on PATH or the reviewer runtime is not installed"; done
+      declare_row CODEX SKIP "$id" "$(label_of "$id" "$CODEX_ROWS") — codex is not on PATH or the reviewer runtime is not installed${cxd}"; done
   else
     if [ "$RUNNER" = real ]; then
       # current codex-cli: `codex sandbox -- <cmd>` (the OS is implied); older builds took `sandbox macos|linux -- <cmd>`
@@ -476,8 +521,9 @@ run_codex() {
           -c "shell_environment_policy.set={SLP_PROBE_VISIBLE=\"$VISIBLE\"}" \
           sandbox "$@" sh "$SCRATCH/steps.sh" "$PROT" "$SCRATCH" /dev/null "$CRED" "$CANARY" "$VISIBLE" 2>"$ef")
       }
-      OUT="$(cxrun "$SCRATCH/cx.err" --)" || true
-      if ! grep -q '^ctl-read rc=' <<< "$OUT" && grep -qiE 'usage|unrecognized|unexpected argument|subcommand' "$SCRATCH/cx.err"; then
+      OUT="$(cxrun "$SCRATCH/cx.err" --)"; cxrc=$?
+      # legacy retry only for a clap-style parser rejection with the usage exit status, never for a runtime denial
+      if ! grep -q '^ctl-read rc=' <<< "$OUT" && [ "$cxrc" = 2 ] && grep -qE '^(error: (unexpected argument|unrecognized subcommand|the following required arguments)|Usage: codex sandbox)' "$SCRATCH/cx.err"; then
         OUT="$(cxrun "$SCRATCH/cx2.err" "$SBX" --)" || true
         grep -q '^ctl-read rc=' <<< "$OUT" || cxd="; legacy form 'sandbox $SBX --' also failed$(errnote "$SCRATCH/cx2.err")"
       fi
@@ -511,10 +557,10 @@ run_codex() {
       [ .. | objects | select(((.type // .item_type // .name // "") | tostring | test("^(file_change|apply_patch|patch_apply.*)$")) and ((tostring) | contains($p))) ]
       | map(if ((.status // "") | tostring | test("fail|declin|denied|rejected")) and ((tostring) | test("sandbox|read-only|permission denied|operation not permitted|not permitted|denied by"; "i")) then "denied"
             elif ((.status // "") | tostring | test("completed|success|applied")) then "ran" else "unclear" end)
-      | unique | join(",")' "$SCRATCH/codex.jsonl" 2>/dev/null)"
+      | unique | join(",")' "$SCRATCH/codex.jsonl" 2>>"$JQERR")"
   if [ "$(cat "$PROT/src/a.txt")" != "$SRC_SUM" ]; then declare_row CODEX FAIL cx-tool "$tl — the file changed"
   elif [ "$ev" = denied ]; then declare_row CODEX PASS cx-tool "$tl"
-  else declare_row CODEX SKIP cx-tool "$tl — no identified write operation with an explicit denial in structured output (saw: ${ev:-none})$([ "$RUNNER" != real ] || errnote "$SCRATCH/codex-tool.err")"; fi
+  else declare_row CODEX SKIP cx-tool "$tl — no identified write operation with an explicit denial in structured output (saw: ${ev:-none})$([ "$RUNNER" != real ] || errnote "$SCRATCH/codex-tool.err")$(errnote "$JQERR")"; fi
   summary CODEX codex "sandbox-binary only (launcher/Paseo modeId path unverified)"
   echo "KNOWN LIMIT (codex): auth.json is linked from the user's login and read-only does not restrict reads; paseo's modeId-to-flag mapping is not probed here"
 }
